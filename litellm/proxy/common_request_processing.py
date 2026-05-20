@@ -16,6 +16,7 @@ from typing import (
     Union,
 )
 
+import anyio
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
@@ -24,6 +25,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 import litellm
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._uuid import uuid
+
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -533,6 +535,39 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
                 stack.append(inner)
         depth += 1
     return False
+
+
+_CLIENT_DISCONNECT_TIMEOUT_SECONDS = 600
+
+
+async def _check_request_disconnection(
+    request: Request,
+    llm_api_call_task,
+    disconnect_event: asyncio.Event,
+):
+    """
+    Poll for client disconnection using raw ASGI receive messages.
+    If disconnected, cancel the backend LLM call to stop inference and cost accrual.
+
+    Uses ``request.receive()`` + ``"http.disconnect"`` rather than
+    ``request.is_disconnected()`` because the receive-based check detects
+    the disconnect event as soon as the ASGI server signals it, whereas
+    ``is_disconnected()`` can lag behind the actual TCP teardown.
+    """
+    start_time = time.time()
+    while time.time() - start_time < _CLIENT_DISCONNECT_TIMEOUT_SECONDS:
+        await asyncio.sleep(1)
+        try:
+            message = await request.receive()
+        except Exception:
+            # receive() may raise on unexpected ASGI errors; treat as disconnect
+            llm_api_call_task.cancel()
+            disconnect_event.set()
+            return
+        if message.get("type") == "http.disconnect":
+            llm_api_call_task.cancel()
+            disconnect_event.set()
+            return
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -1190,7 +1225,23 @@ class ProxyBaseLLMRequestProcessing:
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        responses = await llm_responses
+        # Detect client disconnect and cancel the upstream LLM request
+        disconnect_event = asyncio.Event()
+        disconnect_task = asyncio.create_task(
+            _check_request_disconnection(request, llm_responses, disconnect_event)
+        )
+
+        try:
+            responses = await llm_responses
+            disconnect_task.cancel()
+        except asyncio.CancelledError:
+            disconnect_task.cancel()
+            if disconnect_event.is_set():
+                raise HTTPException(
+                    status_code=499,
+                    detail="Client disconnected the request",
+                )
+            raise
 
         response = responses[1]
 
@@ -1957,6 +2008,16 @@ class ProxyBaseLLMRequestProcessing:
                 code=getattr(e, "status_code", 500),
             )
             yield serialize_error(proxy_exception)
+        finally:
+            with anyio.CancelScope(shield=True):
+                if hasattr(response, "aclose"):
+                    try:
+                        await response.aclose()
+                    except BaseException as e:
+                        verbose_proxy_logger.debug(
+                            "async_streaming_data_generator: error closing response stream: %s",
+                            e,
+                        )
 
     @staticmethod
     async def async_sse_data_generator(

@@ -1,3 +1,8 @@
+# Proxy passthrough for corporate networks
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+
 # Base image for building
 ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:31da6565f35af6401031c1d7aa91dc84ac76c5c48edd17fb90f0ed9e3173c7a9
 
@@ -9,6 +14,15 @@ FROM $UV_IMAGE AS uvbin
 
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+ENV NO_PROXY=${NO_PROXY}
+ENV http_proxy=${HTTP_PROXY}
+ENV https_proxy=${HTTPS_PROXY}
+ENV no_proxy=${NO_PROXY}
 
 WORKDIR /app
 USER root
@@ -65,6 +79,15 @@ RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+ENV NO_PROXY=${NO_PROXY}
+ENV http_proxy=${HTTP_PROXY}
+ENV https_proxy=${HTTPS_PROXY}
+ENV no_proxy=${NO_PROXY}
 
 USER root
 
@@ -79,6 +102,9 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile && \
     done && \
     npm cache clean --force && \
     { apk del --no-cache npm 2>/dev/null || true; }
+
+ENV HTTP_PROXY= HTTPS_PROXY= NO_PROXY= \
+    http_proxy= https_proxy= no_proxy=
 
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}"
