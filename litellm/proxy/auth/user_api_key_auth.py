@@ -1284,6 +1284,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                 )
             abbreviated_api_key = abbreviate_api_key(api_key=api_key)
+            # 保存原始 api_key 用于运管认证（运管需要原始 sk 值）
+            original_api_key_for_yunguan = api_key
             if api_key.startswith("sk-"):
                 api_key = hash_token(token=api_key)
 
@@ -1298,10 +1300,55 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
             except ProxyException as e:
                 if e.code == 401 or e.code == "401":
-                    e.message = "Authentication Error, Invalid proxy server token passed. Received API Key = {}, Key Hash (Token) ={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
-                        abbreviated_api_key, api_key
+                    # ===== 运管认证兜底逻辑 =====
+                    # 在标准认证失败后，尝试通过运管接口校验 SK
+                    import sys
+                    from litellm.proxy.auth.yunguan_auth import yunguan_auth_fallback
+                    
+                    # 获取模型名称用于运管认证
+                    model_for_yunguan = _get_model_from_request_context(
+                        request_data=request_data,
+                        route=route,
+                        request=request,
                     )
-                raise e
+                    
+                    sys.stderr.write(f"[YUNGUAN] 标准认证失败，尝试运管认证: sk={abbreviated_api_key}, enable_yunguan={general_settings.get('enable_yunguan_auth')}, base_url={general_settings.get('yunguan_base_url')}\n")
+                    sys.stderr.flush()
+                    
+                    verbose_proxy_logger.info(
+                        f"标准认证失败，尝试运管认证: sk={abbreviated_api_key}"
+                    )
+                    
+                    yunguan_valid_token, yunguan_error_code = await yunguan_auth_fallback(
+                        api_key=original_api_key_for_yunguan,
+                        model=model_for_yunguan,
+                        general_settings=general_settings,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                        parent_otel_span=parent_otel_span,
+                    )
+                    
+                    if yunguan_valid_token is not None:
+                        # 运管认证成功，使用返回的认证对象
+                        valid_token = yunguan_valid_token
+                        sys.stderr.write(f"[YUNGUAN] 运管认证成功: team_id={valid_token.team_id}\n")
+                        sys.stderr.flush()
+                        verbose_proxy_logger.info(
+                            f"运管认证成功: sk={abbreviated_api_key}, team_id={valid_token.team_id}"
+                        )
+                    else:
+                        # 运管认证也失败，抛出原始异常，包含运管错误码
+                        sys.stderr.write(f"[YUNGUAN] 运管认证也失败: error_code={yunguan_error_code}\n")
+                        sys.stderr.flush()
+                        error_suffix = f"ZJIC.{yunguan_error_code}" if yunguan_error_code else "运管认证也未通过"
+                        e.message = "Authentication Error, Invalid proxy server token passed. Received API Key = {}, Key Hash (Token) ={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`.{}.".format(
+                            abbreviated_api_key, api_key, error_suffix
+                        )
+                        raise e
+                    # ===== 运管认证逻辑结束 =====
+                else:
+                    raise e
             # update end-user params on valid token
             # These can change per request - it's important to update them here
             valid_token.end_user_id = end_user_params.get("end_user_id")
