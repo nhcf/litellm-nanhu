@@ -1,0 +1,18 @@
+# 运管认证集成配置示例
+# 将此配置合并到您的 config.yaml 的 general_settings 中
+
+general_settings:
+  # 启用运管认证兜底
+  enable_yunguan_auth: true
+  
+  # 运管接口基地址
+  yunguan_base_url: "https://zjic.zhejianglab.com"
+  
+  # 运管认证接口路径（相对于基地址）
+  yunguan_auth_path: "/apis/control-zjic/projectSk/check"
+  
+  # 运管接口超时时间（秒）
+  yunguan_timeout: 10.0
+  
+  # master_key 必须配置（LiteLLM 标准认证需要）
+  master_key: "sk-litellm-123456"

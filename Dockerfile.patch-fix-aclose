@@ -1,0 +1,7 @@
+FROM 10.200.93.79:15080/gyjc/litellm:v1.85.0-patch-disconnect
+
+# Patch: fix CancelScope(shield=True) that could freeze the event loop
+# when response.aclose() blocks indefinitely on upstream LLM disconnect.
+# Replace with asyncio.wait_for(timeout=5.0) so aclose() is bounded.
+COPY litellm/proxy/common_request_processing.py /app/.venv/lib/python3.13/site-packages/litellm/proxy/common_request_processing.py
+COPY litellm/proxy/common_request_processing.py /app/litellm/proxy/common_request_processing.py
