@@ -22,7 +22,7 @@ class TestDeepSeekThinkingParams:
         assert "reasoning_effort" in params
 
     def test_map_thinking_enabled(self):
-        """Test that thinking={"type": "enabled"} is passed through correctly."""
+        """Test that thinking={"type": "enabled"} is placed in extra_body for DeepSeek API."""
         non_default_params = {"thinking": {"type": "enabled"}}
         optional_params = {}
 
@@ -33,7 +33,7 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["thinking"] == {"type": "enabled"}
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
     def test_map_thinking_with_budget_tokens_strips_budget(self):
         """Test that budget_tokens is stripped from thinking param (DeepSeek doesn't support it)."""
@@ -48,8 +48,8 @@ class TestDeepSeekThinkingParams:
         )
 
         # Should strip budget_tokens, only pass type
-        assert result["thinking"] == {"type": "enabled"}
-        assert "budget_tokens" not in result.get("thinking", {})
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
+        assert "budget_tokens" not in result["extra_body"]["thinking"]
 
     def test_map_reasoning_effort_medium(self):
         """Test that reasoning_effort='medium' maps to thinking enabled."""
@@ -63,7 +63,7 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["thinking"] == {"type": "enabled"}
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
     def test_map_reasoning_effort_low(self):
         """Test that reasoning_effort='low' maps to thinking enabled."""
@@ -77,7 +77,7 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["thinking"] == {"type": "enabled"}
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
     def test_map_reasoning_effort_high(self):
         """Test that reasoning_effort='high' maps to thinking enabled."""
@@ -91,7 +91,7 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["thinking"] == {"type": "enabled"}
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
     def test_map_reasoning_effort_none_does_not_enable_thinking(self):
         """Test that reasoning_effort='none' does not enable thinking."""
@@ -137,7 +137,7 @@ class TestDeepSeekThinkingParams:
         )
 
         # thinking should be set, reasoning_effort should not override
-        assert result["thinking"] == {"type": "enabled"}
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
     def test_invalid_thinking_type_ignored(self):
         """Test that invalid thinking type values are ignored."""
@@ -166,3 +166,33 @@ class TestDeepSeekThinkingParams:
         )
 
         assert "thinking" not in result
+
+    def test_thinking_preserves_existing_extra_body(self):
+        """Test that thinking is merged into existing extra_body without overwriting."""
+        non_default_params = {"thinking": {"type": "enabled"}}
+        optional_params = {"extra_body": {"existing_key": "existing_value"}}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
+        assert result["extra_body"]["existing_key"] == "existing_value"
+
+    def test_reasoning_effort_preserves_existing_extra_body(self):
+        """Test that reasoning_effort merges into existing extra_body without overwriting."""
+        non_default_params = {"reasoning_effort": "medium"}
+        optional_params = {"extra_body": {"existing_key": "existing_value"}}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
+        assert result["extra_body"]["existing_key"] == "existing_value"
