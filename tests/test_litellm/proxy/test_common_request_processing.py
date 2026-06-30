@@ -2199,3 +2199,235 @@ class TestHandleLLMApiExceptionDictDetail:
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.message == "Content blocked by guardrail"
         assert proxy_exc.provider_specific_fields is None
+
+
+class TestAsyncStreamingDataGeneratorFinally:
+    """Tests for the finally block in async_streaming_data_generator.
+
+    Verifies the response.aclose() is called via asyncio.wait_for with
+    a 5-second timeout instead of anyio.CancelScope.
+    """
+
+    @pytest.mark.asyncio
+    async def test_aclose_called_on_normal_completion(self):
+        """aclose should be called via finally block on normal completion."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        request_data = {"model": "test-model", "messages": []}
+        proxy_logging_obj = MagicMock()
+
+        mock_chunks = [{"choices": [{"delta": {"content": "hi"}}]}]
+
+        async def mock_iterator(*args, **kwargs):
+            for chunk in mock_chunks:
+                yield chunk
+
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = mock_iterator
+        proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+            side_effect=lambda **kwargs: kwargs.get("response")
+        )
+        proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+
+        def serialize_chunk(c):
+            return f"data: {c}\n\n"
+
+        def serialize_error(e):
+            return f"error: {e}\n\n"
+
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=mock_response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=serialize_chunk,
+            serialize_error=serialize_error,
+        )
+        async for _ in gen:
+            pass
+
+        mock_response.aclose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_aclose_called_on_exception(self):
+        """aclose should still be called via finally block when an exception occurs."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        request_data = {"model": "test-model", "messages": []}
+        proxy_logging_obj = MagicMock()
+
+        async def mock_iterator(*args, **kwargs):
+            yield {"choices": [{"delta": {"content": "hi"}}]}
+            raise ValueError("mid-stream error")
+
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = mock_iterator
+        proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+            side_effect=lambda **kwargs: kwargs.get("response")
+        )
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+
+        def serialize_chunk(c):
+            return f"data: {c}\n\n"
+
+        def serialize_error(e):
+            return f"error: {e}\n\n"
+
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=mock_response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=serialize_chunk,
+            serialize_error=serialize_error,
+        )
+        async for _ in gen:
+            pass
+
+        # aclose should be called even though mid-stream error occurred
+        mock_response.aclose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_aclose_exception_is_swallowed(self):
+        """aclose raising an exception should be swallowed, not propagated."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        request_data = {"model": "test-model", "messages": []}
+        proxy_logging_obj = MagicMock()
+
+        mock_chunks = [{"choices": [{"delta": {"content": "hi"}}]}]
+
+        async def mock_iterator(*args, **kwargs):
+            for chunk in mock_chunks:
+                yield chunk
+
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = mock_iterator
+        proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+            side_effect=lambda **kwargs: kwargs.get("response")
+        )
+        proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+        mock_response = MagicMock()
+        # aclose raises an exception (simulating connection already closed)
+        mock_response.aclose = AsyncMock(
+            side_effect=RuntimeError("connection already closed")
+        )
+
+        def serialize_chunk(c):
+            return f"data: {c}\n\n"
+
+        def serialize_error(e):
+            return f"error: {e}\n\n"
+
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=mock_response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=serialize_chunk,
+            serialize_error=serialize_error,
+        )
+        # Should complete without raising the aclose exception
+        async for _ in gen:
+            pass
+
+        mock_response.aclose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_aclose_when_response_has_no_aclose(self):
+        """No error should occur when response doesn't have aclose method."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        request_data = {"model": "test-model", "messages": []}
+        proxy_logging_obj = MagicMock()
+
+        mock_chunks = [{"choices": [{"delta": {"content": "hi"}}]}]
+
+        async def mock_iterator(*args, **kwargs):
+            for chunk in mock_chunks:
+                yield chunk
+
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = mock_iterator
+        proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+            side_effect=lambda **kwargs: kwargs.get("response")
+        )
+        proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+        # Response without aclose (e.g., a plain dict mocked response)
+        mock_response = MagicMock(spec=[])
+
+        def serialize_chunk(c):
+            return f"data: {c}\n\n"
+
+        def serialize_error(e):
+            return f"error: {e}\n\n"
+
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=mock_response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=serialize_chunk,
+            serialize_error=serialize_error,
+        )
+        async for _ in gen:
+            pass
+
+        # No aclose called since response didn't have it
+        # Test passes if no exception is raised
+
+    @pytest.mark.asyncio
+    async def test_aclose_called_on_early_exit(self):
+        """aclose should be called via finally when generator is abandoned early."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        request_data = {"model": "test-model", "messages": []}
+        proxy_logging_obj = MagicMock()
+
+        mock_chunks = [
+            {"choices": [{"delta": {"content": "chunk1"}}]},
+            {"choices": [{"delta": {"content": "chunk2"}}]},
+            {"choices": [{"delta": {"content": "chunk3"}}]},
+        ]
+
+        async def mock_iterator(*args, **kwargs):
+            for chunk in mock_chunks:
+                yield chunk
+
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = mock_iterator
+        proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+            side_effect=lambda **kwargs: kwargs.get("response")
+        )
+        proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+        mock_response = MagicMock()
+        mock_response.aclose = AsyncMock()
+
+        def serialize_chunk(c):
+            return f"data: {c}\n\n"
+
+        def serialize_error(e):
+            return f"error: {e}\n\n"
+
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=mock_response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=serialize_chunk,
+            serialize_error=serialize_error,
+        )
+        # Consume only the first chunk, then close (simulates client disconnect)
+        await gen.__anext__()
+        await gen.aclose()
+
+        mock_response.aclose.assert_awaited_once()

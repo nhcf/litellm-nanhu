@@ -16,7 +16,6 @@ from typing import (
     Union,
 )
 
-import anyio
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
@@ -2009,15 +2008,11 @@ class ProxyBaseLLMRequestProcessing:
             )
             yield serialize_error(proxy_exception)
         finally:
-            with anyio.CancelScope(shield=True):
-                if hasattr(response, "aclose"):
-                    try:
-                        await response.aclose()
-                    except BaseException as e:
-                        verbose_proxy_logger.debug(
-                            "async_streaming_data_generator: error closing response stream: %s",
-                            e,
-                        )
+            if hasattr(response, "aclose"):
+                try:
+                    await asyncio.wait_for(response.aclose(), timeout=5.0)
+                except Exception:
+                    pass
 
     @staticmethod
     async def async_sse_data_generator(
