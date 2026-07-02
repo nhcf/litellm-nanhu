@@ -169,6 +169,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         ]  # works across all models
 
         model_specific_params = []
+
+        # Add thinking parameter support for DeepSeek V4 models
+        if self._is_deepseek_v4_model(model):
+            base_params.extend(["thinking", "reasoning_effort"])
+
         if (
             model != "gpt-3.5-turbo-16k" and model != "gpt-4"
         ):  # gpt-4 does not support 'response_format'
@@ -217,12 +222,22 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        return self._map_openai_params(
+        # First handle standard OpenAI params
+        optional_params = self._map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
         )
+
+        # Handle DeepSeek thinking parameters if this is a DeepSeek V4 model
+        if self._is_deepseek_v4_model(model):
+            optional_params = self._handle_deepseek_thinking_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+            )
+
+        return optional_params
 
     def contains_pdf_url(self, content_item: ChatCompletionFileObjectFile) -> bool:
         potential_pdf_url_starts = ["https://", "http://", "www."]
@@ -779,6 +794,106 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             sync_stream=sync_stream,
             json_mode=json_mode,
         )
+
+    def _is_deepseek_v4_model(self, model: str) -> bool:
+        """
+        Check if model is a DeepSeek V4 series model that supports thinking parameters.
+
+        Args:
+            model: Model name to check
+
+        Returns:
+            True if this is a DeepSeek V4/V3.2 model, False otherwise
+        """
+        model_lower = model.lower()
+        return any([
+            "deepseek-v4" in model_lower,
+            "deepseek-v3.2" in model_lower,
+            "deepseek_v4" in model_lower,
+            "deepseek_v3.2" in model_lower,
+            model_lower.startswith("deepseek/v4"),
+            model_lower.startswith("deepseek/v3.2"),
+        ])
+
+    def _handle_deepseek_thinking_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+    ) -> dict:
+        """
+        Handle thinking and reasoning_effort parameters for DeepSeek models.
+
+        Converts thinking/reasoning_effort parameters to chat_template_kwargs format
+        that DeepSeek's API expects.
+
+        Reference: https://api-docs.deepseek.com/guides/thinking_mode
+
+        Args:
+            non_default_params: Parameters from the request
+            optional_params: Processed optional parameters
+
+        Returns:
+            Updated optional_params with chat_template_kwargs for thinking mode
+        """
+        # Pop thinking/reasoning_effort from optional_params (may have been added by parent)
+        thinking_value = optional_params.pop("thinking", None) or non_default_params.get("thinking")
+        reasoning_effort = optional_params.pop("reasoning_effort", None) or non_default_params.get("reasoning_effort")
+
+        # Determine if thinking mode should be enabled and get reasoning_effort value
+        enable_thinking = False
+        final_reasoning_effort = None
+
+        # Valid reasoning_effort values for chat_template_kwargs
+        valid_effort_values = {"low", "medium", "high", "max"}
+
+        # Handle thinking parameter
+        if thinking_value is not None and isinstance(thinking_value, dict):
+            thinking_type = thinking_value.get("type")
+            if thinking_type in ("enabled", "adaptive"):
+                # For adaptive thinking, check if we have a valid reasoning_effort
+                if thinking_type == "adaptive":
+                    # reasoning_effort should come from output_config.effort or reasoning_effort param
+                    if reasoning_effort and reasoning_effort in valid_effort_values:
+                        enable_thinking = True
+                        final_reasoning_effort = reasoning_effort
+                    elif reasoning_effort is None:
+                        # Default to high if no reasoning_effort provided with adaptive
+                        enable_thinking = True
+                        final_reasoning_effort = "high"
+                else:  # type == "enabled"
+                    enable_thinking = True
+                    final_reasoning_effort = (
+                        reasoning_effort
+                        if reasoning_effort in valid_effort_values
+                        else "high"
+                    )
+
+        # Handle reasoning_effort alone (without thinking param)
+        elif reasoning_effort is not None and reasoning_effort != "none":
+            # Check for dict type first (from OpenAI adapter) to avoid TypeError
+            if isinstance(reasoning_effort, dict):
+                # reasoning_effort might be a dict with "effort" key (from OpenAI adapter)
+                effort_value = reasoning_effort.get("effort")
+                if effort_value in valid_effort_values:
+                    enable_thinking = True
+                    final_reasoning_effort = effort_value
+            elif reasoning_effort in valid_effort_values:
+                enable_thinking = True
+                final_reasoning_effort = reasoning_effort
+
+        # Generate chat_template_kwargs for thinking mode
+        if enable_thinking:
+            if "extra_body" not in optional_params:
+                optional_params["extra_body"] = {}
+            optional_params["extra_body"]["chat_template_kwargs"] = {
+                "reasoning_effort": final_reasoning_effort,
+                "thinking": True,
+                "enable_thinking": True,
+            }
+            # Also keep the legacy thinking param for backward compatibility
+            optional_params["extra_body"]["thinking"] = {"type": "enabled"}
+
+        return optional_params
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):

@@ -6,6 +6,7 @@ Tests the thinking and reasoning_effort parameter handling for DeepSeek models.
 
 import pytest
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class TestDeepSeekThinkingParams:
@@ -304,3 +305,100 @@ class TestDeepSeekThinkingParams:
 
         assert "chat_template_kwargs" not in result.get("extra_body", {})
         assert "thinking" not in result.get("extra_body", {})
+
+
+class TestOpenAIProviderDeepSeekThinking:
+    """Test thinking parameter handling for DeepSeek models under OpenAI provider."""
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+        self.flash_model = "DeepSeek-V4-Flash"
+        self.pro_model = "DeepSeek-V4-Pro"
+
+    def test_is_deepseek_v4_model_detection(self):
+        """Test that DeepSeek V4 models are correctly detected."""
+        assert self.config._is_deepseek_v4_model("DeepSeek-V4-Flash") is True
+        assert self.config._is_deepseek_v4_model("DeepSeek-V4-Pro") is True
+        assert self.config._is_deepseek_v4_model("deepseek-v4-flash") is True
+        assert self.config._is_deepseek_v4_model("deepseek-v3.2") is True
+        assert self.config._is_deepseek_v4_model("gpt-4") is False
+        assert self.config._is_deepseek_v4_model("claude-3") is False
+
+    def test_supported_params_includes_thinking_for_deepseek(self):
+        """Test that thinking params are added for DeepSeek V4 models."""
+        flash_params = self.config.get_supported_openai_params(self.flash_model)
+        pro_params = self.config.get_supported_openai_params(self.pro_model)
+        gpt_params = self.config.get_supported_openai_params("gpt-4")
+
+        assert "thinking" in flash_params
+        assert "reasoning_effort" in flash_params
+        assert "thinking" in pro_params
+        assert "reasoning_effort" in pro_params
+        assert "thinking" not in gpt_params
+        assert "reasoning_effort" not in gpt_params
+
+    def test_deepseek_thinking_enabled_in_openai_provider(self):
+        """Test thinking parameter handling for DeepSeek under OpenAI provider."""
+        non_default_params = {"thinking": {"type": "enabled"}}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.flash_model,
+            drop_params=False,
+        )
+
+        assert "extra_body" in result
+        assert "chat_template_kwargs" in result["extra_body"]
+        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
+        assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
+        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+
+    def test_deepseek_reasoning_effort_high(self):
+        """Test reasoning_effort parameter for DeepSeek under OpenAI provider."""
+        non_default_params = {"reasoning_effort": "high"}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.pro_model,
+            drop_params=False,
+        )
+
+        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
+
+    def test_deepseek_adaptive_thinking(self):
+        """Test adaptive thinking type for DeepSeek."""
+        non_default_params = {
+            "thinking": {"type": "adaptive"},
+            "reasoning_effort": "max"
+        }
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.flash_model,
+            drop_params=False,
+        )
+
+        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "max"
+        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
+
+    def test_non_deepseek_model_no_thinking_handling(self):
+        """Test that non-DeepSeek models don't get thinking parameter processing."""
+        non_default_params = {"thinking": {"type": "enabled"}}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="gpt-4",
+            drop_params=False,
+        )
+
+        # Should not have extra_body with chat_template_kwargs
+        assert "extra_body" not in result or "chat_template_kwargs" not in result.get("extra_body", {})
