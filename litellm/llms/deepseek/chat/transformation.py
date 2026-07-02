@@ -33,7 +33,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Map OpenAI params to DeepSeek params.
 
         Handles `thinking` and `reasoning_effort` parameters for DeepSeek reasoner models.
-        DeepSeek only supports `{"type": "enabled"}` - no budget_tokens like Anthropic.
+        DeepSeek supports `chat_template_kwargs` format for thinking mode:
+        - chat_template_kwargs: {"reasoning_effort": "high", "thinking": true, "enable_thinking": true}
 
         Reference: https://api-docs.deepseek.com/guides/thinking_mode
         """
@@ -47,18 +48,59 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         thinking_value = optional_params.pop("thinking", None)
         reasoning_effort = optional_params.pop("reasoning_effort", None)
 
-        # Handle thinking parameter - only accept {"type": "enabled"}
-        if thinking_value is not None:
-            if (
-                isinstance(thinking_value, dict)
-                and thinking_value.get("type") == "enabled"
-            ):
-                # DeepSeek only accepts {"type": "enabled"}, ignore budget_tokens
-                optional_params["thinking"] = {"type": "enabled"}
+        # Determine if thinking mode should be enabled and get reasoning_effort value
+        enable_thinking = False
+        final_reasoning_effort = None
 
-        # Handle reasoning_effort - map to thinking enabled
+        # Valid reasoning_effort values for chat_template_kwargs
+        valid_effort_values = {"low", "medium", "high", "max"}
+
+        # Handle thinking parameter
+        if thinking_value is not None and isinstance(thinking_value, dict):
+            thinking_type = thinking_value.get("type")
+            if thinking_type in ("enabled", "adaptive"):
+                # For adaptive thinking, check if we have a valid reasoning_effort
+                if thinking_type == "adaptive":
+                    # reasoning_effort should come from output_config.effort or reasoning_effort param
+                    if reasoning_effort and reasoning_effort in valid_effort_values:
+                        enable_thinking = True
+                        final_reasoning_effort = reasoning_effort
+                    elif reasoning_effort is None:
+                        # Default to high if no reasoning_effort provided with adaptive
+                        enable_thinking = True
+                        final_reasoning_effort = "high"
+                else:  # type == "enabled"
+                    enable_thinking = True
+                    final_reasoning_effort = (
+                        reasoning_effort
+                        if reasoning_effort in valid_effort_values
+                        else "high"
+                    )
+
+        # Handle reasoning_effort alone (without thinking param)
         elif reasoning_effort is not None and reasoning_effort != "none":
-            optional_params["thinking"] = {"type": "enabled"}
+            # Check for dict type first (from OpenAI adapter) to avoid TypeError
+            if isinstance(reasoning_effort, dict):
+                # reasoning_effort might be a dict with "effort" key (from OpenAI adapter)
+                effort_value = reasoning_effort.get("effort")
+                if effort_value in valid_effort_values:
+                    enable_thinking = True
+                    final_reasoning_effort = effort_value
+            elif reasoning_effort in valid_effort_values:
+                enable_thinking = True
+                final_reasoning_effort = reasoning_effort
+
+        # Generate chat_template_kwargs for thinking mode
+        if enable_thinking:
+            if "extra_body" not in optional_params:
+                optional_params["extra_body"] = {}
+            optional_params["extra_body"]["chat_template_kwargs"] = {
+                "reasoning_effort": final_reasoning_effort,
+                "thinking": True,
+                "enable_thinking": True,
+            }
+            # Also keep the legacy thinking param for backward compatibility
+            optional_params["extra_body"]["thinking"] = {"type": "enabled"}
 
         return optional_params
 
