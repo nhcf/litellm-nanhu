@@ -1455,6 +1455,19 @@ class LiteLLMAnthropicMessagesAdapter:
                         return "thinking", ChatCompletionThinkingBlock(
                             type="thinking", thinking=thinking, signature=signature
                         )
+            elif (
+                isinstance(choice, StreamingChoices)
+                and hasattr(choice.delta, "reasoning_content")
+                and choice.delta.reasoning_content is not None
+                and len(choice.delta.reasoning_content) > 0
+            ):
+                # Providers like DeepSeek return reasoning text via the
+                # ``reasoning_content`` delta field instead of ``thinking_blocks``.
+                # Map these to an Anthropic ``thinking`` content block so the
+                # block type, index, and block-start/stop events are emitted
+                # correctly (mirrors how ``thinking_blocks`` chunks are handled
+                # above).
+                return "thinking", {"type": "thinking", "thinking": "", "signature": ""}
 
         return "text", TextBlock(type="text", text="")
 

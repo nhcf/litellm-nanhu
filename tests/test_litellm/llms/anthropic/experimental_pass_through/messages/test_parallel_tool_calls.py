@@ -131,17 +131,15 @@ def test_anthropic_stream_wrapper_single_tool_call():
         chunks.append(chunk)
         chunk_types.append(chunk.get("type"))
 
-    # Verify the expected sequence of chunk types
+    # Verify the expected sequence of chunk types.
+    # The initial content_block_start now reflects the upstream's starting
+    # chunk type (tool_use), so no spurious empty text block is emitted.
+    # The tool name chunk arrives with arguments="" (an input_json_delta with
+    # empty partial_json) followed by two argument parts.
     expected_types = [
         "message_start",  # Initial message start
-        # TODO: for future contributors: if the initial content_block_start
-        # respects the upstream's starting chunk, the initial empty text block
-        # should be removed (and this test should be updated accordingly)
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Initial empty text block start
-        "content_block_stop",  # End of empty text block
-        # ---------------------------------------------------------------------
         "content_block_start",  # Start of first tool_use content block
+        "content_block_delta",  # "" (tool name chunk, empty args)
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
         "content_block_stop",  # End of first tool_use content block
@@ -150,6 +148,9 @@ def test_anthropic_stream_wrapper_single_tool_call():
     ]
 
     assert expected_types == chunk_types
+
+    # The first content_block_start must be a tool_use block (not text)
+    assert chunks[1]["content_block"]["type"] == "tool_use"
 
     get_weather_calls = 0
 
@@ -193,17 +194,15 @@ def test_anthropic_stream_wrapper_back_to_back_tool_calls():
         chunks.append(chunk)
         chunk_types.append(chunk.get("type"))
 
-    # Verify the expected sequence of chunk types
+    # Verify the expected sequence of chunk types.
+    # The initial content_block_start now reflects the upstream's starting
+    # chunk type (tool_use), so no spurious empty text block is emitted.
+    # The initial content_block_start now reflects the upstream's starting
+    # chunk type (tool_use), so no spurious empty text block is emitted.
     expected_types = [
         "message_start",  # Initial message start
-        # TODO: for future contributors: if the initial content_block_start
-        # respects the upstream's starting chunk, the initial empty text block
-        # should be removed (and this test should be updated accordingly)
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Initial empty text block start
-        "content_block_stop",  # End of empty text block
-        # ---------------------------------------------------------------------
         "content_block_start",  # Start of first tool_use content block
+        "content_block_delta",  # "" (tool name chunk, empty args)
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
         "content_block_stop",  # End of first tool_use content block
@@ -216,6 +215,9 @@ def test_anthropic_stream_wrapper_back_to_back_tool_calls():
     ]
 
     assert expected_types == chunk_types
+
+    # The first content_block_start must be a tool_use block (not text)
+    assert chunks[1]["content_block"]["type"] == "tool_use"
 
     get_weather_calls = 0
 
@@ -264,22 +266,21 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
         chunks.append(chunk)
         chunk_types.append(chunk.get("type"))
 
-    # Verify the expected sequence of chunk types
+    # Verify the expected sequence of chunk types.
+    # The initial content_block_start now reflects the upstream's starting
+    # chunk type (tool_use), so no spurious empty text block is emitted.
+    # Text chunks are emitted with their content (no longer collapsed into an
+    # empty block_start/stop pair).
     expected_types = [
         "message_start",  # Initial message start
-        # TODO: for future contributors: if the initial content_block_start
-        # respects the upstream's starting chunk, the initial empty text block
-        # should be removed (and this test should be updated accordingly)
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Initial empty text block start
-        "content_block_stop",  # End of empty text block
-        # ---------------------------------------------------------------------
         "content_block_start",  # Start of first tool_use content block
+        "content_block_delta",  # "" (tool name chunk, empty args)
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
         "content_block_stop",  # End of first tool_use content block
-        "content_block_start",  # "The weather is nice today"
-        "content_block_stop",
+        "content_block_start",  # Start of text block (weather nice)
+        "content_block_delta",  # "The weather is nice today."
+        "content_block_stop",  # End of text block
         "content_block_start",  # Start of second tool_use content block
         "content_block_delta",  # {"city":
         "content_block_delta",  # " SF"}
@@ -288,8 +289,9 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
         "content_block_delta",  # {"city":
         "content_block_delta",  # " CHI"}
         "content_block_stop",  # End of third tool_use content block
-        "content_block_start",  # "The weather is not so nice today"
-        "content_block_stop",
+        "content_block_start",  # Start of text block (weather not nice)
+        "content_block_delta",  # "The weather is not so nice today."
+        "content_block_stop",  # End of text block
         "message_delta",  # Stop reason with merged usage
         "message_stop",  # Final message stop
     ]
