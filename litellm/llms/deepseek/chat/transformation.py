@@ -104,6 +104,37 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         return optional_params
 
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Any, dict],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        """
+        Returns a DeepSeek streaming iterator for handling Claude-format thinking blocks.
+
+        DeepSeek returns responses in Anthropic Claude format with:
+        - content_block_start events (thinking vs text)
+        - content_block_delta events (thinking_delta vs text_delta)
+        - content_block_stop events
+        - message_delta with final usage
+
+        This iterator correctly handles:
+        - thinking block identification (type: "thinking")
+        - signature field preservation
+        - block index increment (0 for thinking, 1 for text)
+        - reasoning token counting from thinking content
+
+        Returns:
+            DeepSeekStreamingIterator instance
+        """
+        from .streaming_iterator import DeepSeekStreamingIterator
+
+        return DeepSeekStreamingIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+        )
+
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
