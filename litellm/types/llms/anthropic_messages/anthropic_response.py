@@ -69,6 +69,7 @@ class AnthropicUsage(TypedDict, total=False):
     """
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+    prompt_tokens_details: dict
 
 
 class AnthropicMessagesResponse(TypedDict, total=False):

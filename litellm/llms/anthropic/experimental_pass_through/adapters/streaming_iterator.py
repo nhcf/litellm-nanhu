@@ -73,6 +73,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             output_tokens=0,
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,
+            prompt_tokens_details={"cached_tokens": 0},
         )
 
     def __next__(self):
@@ -299,6 +300,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                     # Add usage to the held chunk
                     uncached_input_tokens = chunk.usage.prompt_tokens or 0
+                    cached_tokens = 0
                     if (
                         hasattr(chunk.usage, "prompt_tokens_details")
                         and chunk.usage.prompt_tokens_details
@@ -314,22 +316,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     usage_dict: UsageDelta = {
                         "input_tokens": uncached_input_tokens,
                         "output_tokens": chunk.usage.completion_tokens or 0,
-                    }
-                    # Add cache tokens if available (for prompt caching support)
-                    if (
-                        hasattr(chunk.usage, "_cache_creation_input_tokens")
-                        and chunk.usage._cache_creation_input_tokens > 0
-                    ):
-                        usage_dict["cache_creation_input_tokens"] = (
+                        "cache_creation_input_tokens": (
                             chunk.usage._cache_creation_input_tokens
-                        )
-                    if (
-                        hasattr(chunk.usage, "_cache_read_input_tokens")
-                        and chunk.usage._cache_read_input_tokens > 0
-                    ):
-                        usage_dict["cache_read_input_tokens"] = (
+                            if hasattr(chunk.usage, "_cache_creation_input_tokens")
+                            else 0
+                        ),
+                        "cache_read_input_tokens": (
                             chunk.usage._cache_read_input_tokens
-                        )
+                            if hasattr(chunk.usage, "_cache_read_input_tokens")
+                            else cached_tokens
+                        ),
+                        "prompt_tokens_details": {"cached_tokens": cached_tokens},
+                    }
                     merged_chunk["usage"] = usage_dict
 
                     # Queue the merged chunk and reset
@@ -520,6 +518,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Chunks that carry a finish_reason or usage are NOT considered empty,
         because they signal stream completion and must be processed.
         """
+        # Usage-only chunks (e.g. from stream_options={"include_usage": True})
+        # carry token counts even when delta is None. They must not be skipped
+        # so the merge logic has a chance to inject usage into message_delta.
+        if getattr(chunk, "usage", None) is not None:
+            return False
         if not chunk.choices:
             # No choices — could still carry usage/finish, don't skip.
             return False
@@ -561,7 +564,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         """
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        # Example logic - customize based on your needs:
+        # Usage-only chunks carry token counts (from stream_options={"include_usage": True})
+        # They do not represent content block transitions. Handle early to avoid
+        # treating them as new blocks.
+        if getattr(chunk, "usage", None) is not None and (
+            not chunk.choices or chunk.choices[0].finish_reason is None
+        ):
+            return False
+
         # If chunk indicates a tool call
         if chunk.choices[0].finish_reason is not None:
             return False

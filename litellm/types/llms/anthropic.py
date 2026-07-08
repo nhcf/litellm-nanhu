@@ -507,11 +507,16 @@ class MessageDelta(TypedDict, total=False):
     stop_reason: Optional[str]
 
 
+class PromptTokensDetails(TypedDict, total=False):
+    cached_tokens: int
+
+
 class UsageDelta(TypedDict, total=False):
     input_tokens: int
     output_tokens: int
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+    prompt_tokens_details: PromptTokensDetails
 
 
 class MessageBlockDelta(TypedDict):
