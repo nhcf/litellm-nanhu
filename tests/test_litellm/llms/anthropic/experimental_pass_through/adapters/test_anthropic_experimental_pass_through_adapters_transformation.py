@@ -2427,3 +2427,239 @@ def test_translate_anthropic_tool_choice_none():
 
     result = adapter.translate_anthropic_tool_choice_to_openai({"type": "none"})
     assert result == "none"
+
+
+class TestTranslateOpenAIResponseToAnthropicUsage:
+    """Tests for usage fields in translate_openai_response_to_anthropic."""
+
+    def test_usage_includes_prompt_tokens_details(self):
+        """AnthropicUsage should include prompt_tokens_details.cached_tokens."""
+        from litellm.types.utils import PromptTokensDetailsWrapper
+
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=30),
+        )
+        response = ModelResponse(
+            id="test-usage-details",
+            model="claude-sonnet-4-5",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(role="assistant", content="ok"),
+                )
+            ],
+            usage=usage,
+        )
+        adapter = LiteLLMAnthropicMessagesAdapter()
+        result = adapter.translate_openai_response_to_anthropic(response=response)
+        assert result["usage"]["prompt_tokens_details"] == {"cached_tokens": 30}
+
+    def test_cache_creation_input_tokens_always_present(self):
+        """cache_creation_input_tokens should be present even when 0."""
+        usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        response = ModelResponse(
+            id="test-cache-creation",
+            model="claude-sonnet-4-5",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(role="assistant", content="ok"),
+                )
+            ],
+            usage=usage,
+        )
+        adapter = LiteLLMAnthropicMessagesAdapter()
+        result = adapter.translate_openai_response_to_anthropic(response=response)
+        assert result["usage"]["cache_creation_input_tokens"] == 0
+
+    def test_cache_read_input_tokens_always_present(self):
+        """cache_read_input_tokens should be present even when 0."""
+        usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        response = ModelResponse(
+            id="test-cache-read",
+            model="claude-sonnet-4-5",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(role="assistant", content="ok"),
+                )
+            ],
+            usage=usage,
+        )
+        adapter = LiteLLMAnthropicMessagesAdapter()
+        result = adapter.translate_openai_response_to_anthropic(response=response)
+        assert "cache_read_input_tokens" in result["usage"]
+        assert result["usage"]["cache_read_input_tokens"] == 0
+
+    def test_cache_read_tokens_fallback_when_internal_is_zero(self):
+        """When _cache_read_input_tokens is 0, fallback to prompt_tokens_details.cached_tokens."""
+        from litellm.types.utils import PromptTokensDetailsWrapper
+
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=25),
+        )
+        response = ModelResponse(
+            id="test-fallback",
+            model="claude-sonnet-4-5",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(role="assistant", content="ok"),
+                )
+            ],
+            usage=usage,
+        )
+        adapter = LiteLLMAnthropicMessagesAdapter()
+        result = adapter.translate_openai_response_to_anthropic(response=response)
+        assert result["usage"]["cache_read_input_tokens"] == 25
+        assert result["usage"]["prompt_tokens_details"]["cached_tokens"] == 25
+
+
+class TestStreamingUsageChunks:
+    """Tests for streaming usage-only chunk handling."""
+
+    def test_is_chunk_empty_returns_false_for_usage_only_chunk(self):
+        """_is_chunk_empty should return False for chunks with usage (not empty)."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+            AnthropicStreamWrapper,
+        )
+
+        usage_chunk = ModelResponseStream(
+            id="test",
+            created=1700000000,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+
+        class DummyStream:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise StopIteration
+
+        wrapper = AnthropicStreamWrapper(
+            completion_stream=DummyStream(), model="test-model"
+        )
+        assert wrapper._is_chunk_empty(usage_chunk) is False
+
+    def test_is_chunk_empty_returns_true_for_empty_chunk(self):
+        """_is_chunk_empty should return True for chunks with no content, usage, or finish."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+            AnthropicStreamWrapper,
+        )
+
+        empty_chunk = ModelResponseStream(
+            id="test",
+            created=1700000000,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=None),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+        class DummyStream:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise StopIteration
+
+        wrapper = AnthropicStreamWrapper(
+            completion_stream=DummyStream(), model="test-model"
+        )
+        assert wrapper._is_chunk_empty(empty_chunk) is True
+
+    def test_should_start_new_content_block_false_for_usage_only(self):
+        """Usage-only chunks should not trigger new content blocks."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+            AnthropicStreamWrapper,
+        )
+
+        usage_chunk = ModelResponseStream(
+            id="test",
+            created=1700000000,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+
+        class DummyStream:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise StopIteration
+
+        wrapper = AnthropicStreamWrapper(
+            completion_stream=DummyStream(), model="test-model"
+        )
+        assert wrapper._should_start_new_content_block(usage_chunk) is False
+
+
+class TestUsageDeltaFields:
+    """Tests for UsageDelta TypedDict fields."""
+
+    def test_usage_delta_includes_prompt_tokens_details(self):
+        """UsageDelta TypedDict should allow prompt_tokens_details."""
+        from litellm.types.llms.anthropic import PromptTokensDetails, UsageDelta
+
+        usage: UsageDelta = {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "prompt_tokens_details": {"cached_tokens": 0},
+        }
+        assert usage["prompt_tokens_details"]["cached_tokens"] == 0
+
+    def test_usage_delta_prompt_tokens_details_positive(self):
+        """UsageDelta prompt_tokens_details with positive cached_tokens."""
+        from litellm.types.llms.anthropic import UsageDelta
+
+        usage: UsageDelta = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 20,
+            "cache_read_input_tokens": 30,
+            "prompt_tokens_details": {"cached_tokens": 30},
+        }
+        assert usage["prompt_tokens_details"]["cached_tokens"] == 30
+        assert usage["cache_read_input_tokens"] == 30
+
+
+class TestAnthropicUsagePromptTokensDetails:
+    """Tests for AnthropicUsage TypedDict prompt_tokens_details field."""
+
+    def test_anthropic_usage_includes_prompt_tokens_details(self):
+        """AnthropicUsage should allow prompt_tokens_details field."""
+        from litellm.types.llms.anthropic_messages.anthropic_response import (
+            AnthropicUsage,
+        )
+
+        usage: AnthropicUsage = {
+            "input_tokens": 70,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 30,
+            "prompt_tokens_details": {"cached_tokens": 30},
+        }
+        assert usage["prompt_tokens_details"] == {"cached_tokens": 30}
