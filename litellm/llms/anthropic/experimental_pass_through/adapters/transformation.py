@@ -1633,6 +1633,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     cache_read_input_tokens=(
                         litellm_usage_chunk._cache_read_input_tokens
                         if hasattr(litellm_usage_chunk, "_cache_read_input_tokens")
+                        and litellm_usage_chunk._cache_read_input_tokens > 0
                         else cached_tokens
                     ),
                     prompt_tokens_details={"cached_tokens": cached_tokens},

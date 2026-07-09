@@ -324,6 +324,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "cache_read_input_tokens": (
                             chunk.usage._cache_read_input_tokens
                             if hasattr(chunk.usage, "_cache_read_input_tokens")
+                            and chunk.usage._cache_read_input_tokens > 0
                             else cached_tokens
                         ),
                         "prompt_tokens_details": {"cached_tokens": cached_tokens},
