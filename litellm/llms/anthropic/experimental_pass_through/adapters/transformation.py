@@ -1402,11 +1402,13 @@ class LiteLLMAnthropicMessagesAdapter:
             cache_creation_input_tokens=(
                 usage._cache_creation_input_tokens
                 if hasattr(usage, "_cache_creation_input_tokens")
+                and usage._cache_creation_input_tokens > 0
                 else 0
             ),
             cache_read_input_tokens=(
                 usage._cache_read_input_tokens
                 if hasattr(usage, "_cache_read_input_tokens")
+                and usage._cache_read_input_tokens > 0
                 else cached_tokens
             ),
             prompt_tokens_details={"cached_tokens": cached_tokens},
