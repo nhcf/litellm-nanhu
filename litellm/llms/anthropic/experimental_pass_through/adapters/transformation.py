@@ -650,9 +650,25 @@ class LiteLLMAnthropicMessagesAdapter:
                 else:
                     assistant_content = assistant_message_str
 
+                # Build reasoning_content from thinking blocks for standard
+                # OpenAI compatibility. thinking_blocks is LiteLLM-internal;
+                # backends (SGLang/DeepSeek) need reasoning_content to
+                # render historical thinking into the prompt.
+                reasoning_content: Optional[str] = None
+                if thinking_blocks:
+                    parts: List[str] = []
+                    for block in thinking_blocks:
+                        if isinstance(block, dict) and block.get("type") == "thinking":
+                            text = block.get("thinking") or ""
+                            if text:
+                                parts.append(text)
+                    if parts:
+                        reasoning_content = "".join(parts)
+
                 assistant_message = ChatCompletionAssistantMessage(
                     role="assistant",
                     content=assistant_content,
+                    reasoning_content=reasoning_content,
                     thinking_blocks=(
                         thinking_blocks if len(thinking_blocks) > 0 else None
                     ),
