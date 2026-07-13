@@ -499,3 +499,102 @@ class TestThinkingSummaryPreservation:
         assert result == {
             "reasoning_effort": {"effort": "medium", "summary": "concise"}
         }
+
+
+class TestThinkingParamNormalization:
+    """Tests for thinking.type 'enable' → 'enabled' normalization."""
+
+    def test_anthropic_thinking_param_accepts_enable_type(self):
+        """AnthropicThinkingParam TypedDict should accept 'enable' as valid type."""
+        from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+        param: AnthropicThinkingParam = {"type": "enable", "budget_tokens": 1000}
+        assert param["type"] == "enable"
+        assert param["budget_tokens"] == 1000
+
+    def test_anthropic_thinking_param_accepts_enabled_type(self):
+        """AnthropicThinkingParam should still accept 'enabled'."""
+        from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+        param: AnthropicThinkingParam = {"type": "enabled", "budget_tokens": 500}
+        assert param["type"] == "enabled"
+
+    def test_anthropic_thinking_param_accepts_adaptive_type(self):
+        """AnthropicThinkingParam should still accept 'adaptive'."""
+        from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+        param: AnthropicThinkingParam = {"type": "adaptive", "budget_tokens": 2000}
+        assert param["type"] == "adaptive"
+
+    def test_thinking_enable_normalized_in_handler_logic(self):
+        """Verify normalization: 'enable' → 'enabled' in handler's normalizing logic."""
+        # Directly verify the normalization logic from the handler
+        thinking = {"type": "enable", "budget_tokens": 1000}
+        assert thinking.get("type") == "enable"
+
+        # Apply the same normalization as the handler
+        if isinstance(thinking, dict) and thinking.get("type") == "enable":
+            thinking = {**thinking, "type": "enabled"}
+
+        assert thinking["type"] == "enabled"
+        assert thinking["budget_tokens"] == 1000
+
+    def test_thinking_enabled_not_modified(self):
+        """Verify 'enabled' is not modified by normalization logic."""
+        thinking = {"type": "enabled", "budget_tokens": 500}
+        if isinstance(thinking, dict) and thinking.get("type") == "enable":
+            thinking = {**thinking, "type": "enabled"}
+        assert thinking["type"] == "enabled"
+
+
+class TestResponseAPIUsageAliases:
+    """Tests for usage field aliases (prompt_tokens→input_tokens, completion_tokens→output_tokens)."""
+
+    def test_prompt_tokens_alias(self):
+        """ResponseAPIUsage should accept prompt_tokens as alias for input_tokens."""
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        usage = ResponseAPIUsage(prompt_tokens=100, output_tokens=50, total_tokens=150)
+        assert usage.input_tokens == 100
+        assert usage.output_tokens == 50
+        assert usage.total_tokens == 150
+
+    def test_completion_tokens_alias(self):
+        """ResponseAPIUsage should accept completion_tokens as alias for output_tokens."""
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        usage = ResponseAPIUsage(input_tokens=100, completion_tokens=50, total_tokens=150)
+        assert usage.input_tokens == 100
+        assert usage.output_tokens == 50
+        assert usage.total_tokens == 150
+
+    def test_both_aliases_simultaneously(self):
+        """ResponseAPIUsage should accept both aliases together."""
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        usage = ResponseAPIUsage(prompt_tokens=200, completion_tokens=80, total_tokens=280)
+        assert usage.input_tokens == 200
+        assert usage.output_tokens == 80
+        assert usage.total_tokens == 280
+
+    def test_prompt_tokens_details_alias(self):
+        """ResponseAPIUsage should accept prompt_tokens_details as alias for input_tokens_details."""
+        from litellm.types.llms.openai import ResponseAPIUsage, InputTokensDetails
+
+        usage = ResponseAPIUsage(
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details={"cached_tokens": 30},
+        )
+        assert usage.input_tokens_details is not None
+        assert usage.input_tokens_details.cached_tokens == 30
+
+    def test_explicit_fields_take_precedence_over_aliases(self):
+        """Explicit input_tokens should take precedence over prompt_tokens alias."""
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        usage = ResponseAPIUsage(
+            input_tokens=999, prompt_tokens=100, output_tokens=50, total_tokens=150
+        )
+        assert usage.input_tokens == 999

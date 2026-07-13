@@ -78,6 +78,7 @@ from pydantic import (
     PrivateAttr,
     field_serializer,
     field_validator,
+    model_validator,
 )
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
@@ -1206,23 +1207,36 @@ class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 
 
 class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
-    input_tokens: int
+    input_tokens: int = 0
     """The number of input tokens."""
 
     input_tokens_details: Optional[InputTokensDetails] = None
     """A detailed breakdown of the input tokens."""
 
-    output_tokens: int
+    output_tokens: int = 0
     """The number of output tokens."""
 
     output_tokens_details: Optional[OutputTokensDetails] = None
     """A detailed breakdown of the output tokens."""
 
-    total_tokens: int
+    total_tokens: int = 0
     """The total number of tokens used."""
 
     cost: Optional[float] = None
     """The cost of the request."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_usage_fields(cls, data: Any) -> Any:
+        """Accept prompt_tokens/completion_tokens as aliases for input_tokens/output_tokens."""
+        if isinstance(data, dict):
+            if "input_tokens" not in data and "prompt_tokens" in data:
+                data["input_tokens"] = data.pop("prompt_tokens")
+            if "output_tokens" not in data and "completion_tokens" in data:
+                data["output_tokens"] = data.pop("completion_tokens")
+            if "input_tokens_details" not in data and "prompt_tokens_details" in data:
+                data["input_tokens_details"] = data.pop("prompt_tokens_details")
+        return data
 
     @field_validator("cost", mode="before")
     @classmethod

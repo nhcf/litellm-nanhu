@@ -334,6 +334,10 @@ def anthropic_messages_handler(
     Args:
         container: Container config with skills for code execution
     """
+    # Normalize "enable" → "enabled" for compatibility with non-standard clients
+    if thinking is not None and isinstance(thinking, dict) and thinking.get("type") == "enable":
+        thinking = {**thinking, "type": "enabled"}
+
     from litellm.types.utils import LlmProviders
 
     metadata = validate_anthropic_api_metadata(metadata)
