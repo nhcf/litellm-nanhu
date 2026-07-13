@@ -307,6 +307,108 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def test_translate_anthropic_messages_to_openai_reasoning_content_from_thinking_blocks():
+    """Test that reasoning_content is extracted from thinking_blocks when assistant
+    message has tool calls. Backends (SGLang/DeepSeek) need reasoning_content to
+    render historical thinking into the prompt."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "What's the weather in Boston?"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "I will check the weather using the get_weather tool.",
+                    "signature": "sig123",
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"},
+                },
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert len(result) == 2
+    assert result[1]["role"] == "assistant"
+    assert "reasoning_content" in result[1]
+    assert result[1]["reasoning_content"] == "I will check the weather using the get_weather tool."
+    assert "thinking_blocks" in result[1]
+    assert "tool_calls" in result[1]
+    assert len(result[1]["tool_calls"]) == 1
+    assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
+
+
+def test_translate_anthropic_messages_to_openai_no_reasoning_content_without_thinking_blocks():
+    """Test that reasoning_content is None when assistant message has no thinking_blocks."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Say hello"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "text", "text": "Hello! How can I help you?"}],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert len(result) == 2
+    assert result[1]["role"] == "assistant"
+    assert result[1].get("reasoning_content") is None
+
+
+def test_translate_anthropic_messages_to_openai_reasoning_content_multiple_thinking_blocks():
+    """Test that reasoning_content concatenates multiple thinking blocks."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Analyze the data"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "Let me analyze the data first.",
+                    "signature": "sigA",
+                },
+                {"type": "redacted_thinking", "data": "REDACTED"},
+                {
+                    "type": "thinking",
+                    "thinking": "Now I should use the analyze tool.",
+                    "signature": "sigB",
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_analyze",
+                    "name": "analyze_data",
+                    "input": {"dataset": "sales"},
+                },
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert len(result) == 2
+    assert result[1]["role"] == "assistant"
+    assert result[1]["reasoning_content"] == "Let me analyze the data first.Now I should use the analyze tool."
+    assert len(result[1]["thinking_blocks"]) == 3
+    assert len(result[1]["tool_calls"]) == 1
+
+
 def test_translate_anthropic_messages_to_openai_tool_message_placement():
     """Test that tool result messages are placed before user messages in the conversation order."""
 
