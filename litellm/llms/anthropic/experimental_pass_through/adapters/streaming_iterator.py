@@ -73,6 +73,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             output_tokens=0,
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,
+            prompt_tokens_details={"cached_tokens": 0},
         )
 
     def __next__(self):
@@ -103,23 +104,38 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
+                # Skip chunks that carry no meaningful content (e.g. DeepSeek's
+                # leading content="" chunk) so they don't start a spurious
+                # empty text block at index 0. This runs before the first
+                # content_block_start is emitted.
+                if self._is_chunk_empty(chunk):
+                    continue
+
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+
+                # Emit the first content_block_start based on the first chunk's
+                # actual type, instead of eagerly assuming "text". Providers that
+                # lead with reasoning (e.g. DeepSeek via ``reasoning_content``) must
+                # get a proper "thinking" block at index 0.
+                if self.sent_content_block_start is False:
+                    self.sent_content_block_start = True
+                    # ``_should_start_new_content_block`` already populated
+                    # ``current_content_block_start`` / ``current_content_block_type``.
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                    # This is the very first block — there is no prior block to
+                    # stop, so do not treat it as a block transition.
+                    should_start_new_block = False
+                elif should_start_new_block:
                     self._increment_content_block_index()
 
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
@@ -128,13 +144,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
 
                 if should_start_new_block and not self.sent_content_block_finish:
-                    # Queue the sequence: content_block_stop -> content_block_start
-                    # For text blocks the trigger chunk is not emitted as a separate
-                    # delta because content_block_start carries the information.
-                    # For tool_use blocks we must also emit the trigger chunk's delta
-                    # when it carries input_json_delta data, because some providers
-                    # (e.g. xAI, Gemini) include tool arguments in the same streaming
-                    # chunk as the function name/id.
+                    # Queue the sequence: content_block_stop -> content_block_start.
+                    # The trigger chunk's delta is re-queued via
+                    # ``_maybe_queue_trigger_delta`` so its content is not silently
+                    # dropped when switching block types (e.g. thinking -> text,
+                    # where the first text chunk carries actual text content).
 
                     # 1. Stop current content block
                     self.chunk_queue.append(
@@ -153,15 +167,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         }
                     )
 
-                    # 3. If the trigger chunk carries tool argument data, queue it
-                    # so the input_json_delta is not silently dropped.
-                    if (
-                        processed_chunk.get("type") == "content_block_delta"
-                        and isinstance(processed_chunk.get("delta"), dict)
-                        and processed_chunk["delta"].get("type") == "input_json_delta"
-                        and processed_chunk["delta"].get("partial_json")
-                    ):
-                        self.chunk_queue.append(processed_chunk)
+                    # 3. Re-queue the trigger chunk's delta when it carries content.
+                    self._maybe_queue_trigger_delta(processed_chunk)
 
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
@@ -243,24 +250,37 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
+                # Skip chunks that carry no meaningful content (e.g. DeepSeek's
+                # leading content="" chunk) so they don't start a spurious
+                # empty text block at index 0. This runs before the first
+                # content_block_start is emitted.
+                if self._is_chunk_empty(chunk):
+                    continue
+
                 # Check if we need to start a new content block
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+
+                # Emit the first content_block_start based on the first chunk's
+                # actual type, instead of eagerly assuming "text". Providers that
+                # lead with reasoning (e.g. DeepSeek via ``reasoning_content``) must
+                # get a proper "thinking" block at index 0.
+                if self.sent_content_block_start is False:
+                    self.sent_content_block_start = True
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                    # This is the very first block — there is no prior block to
+                    # stop, so do not treat it as a block transition.
+                    should_start_new_block = False
+                elif should_start_new_block:
                     self._increment_content_block_index()
 
                 processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
@@ -280,6 +300,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                     # Add usage to the held chunk
                     uncached_input_tokens = chunk.usage.prompt_tokens or 0
+                    cached_tokens = 0
                     if (
                         hasattr(chunk.usage, "prompt_tokens_details")
                         and chunk.usage.prompt_tokens_details
@@ -295,22 +316,19 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     usage_dict: UsageDelta = {
                         "input_tokens": uncached_input_tokens,
                         "output_tokens": chunk.usage.completion_tokens or 0,
-                    }
-                    # Add cache tokens if available (for prompt caching support)
-                    if (
-                        hasattr(chunk.usage, "_cache_creation_input_tokens")
-                        and chunk.usage._cache_creation_input_tokens > 0
-                    ):
-                        usage_dict["cache_creation_input_tokens"] = (
+                        "cache_creation_input_tokens": (
                             chunk.usage._cache_creation_input_tokens
-                        )
-                    if (
-                        hasattr(chunk.usage, "_cache_read_input_tokens")
-                        and chunk.usage._cache_read_input_tokens > 0
-                    ):
-                        usage_dict["cache_read_input_tokens"] = (
+                            if hasattr(chunk.usage, "_cache_creation_input_tokens")
+                            else 0
+                        ),
+                        "cache_read_input_tokens": (
                             chunk.usage._cache_read_input_tokens
-                        )
+                            if hasattr(chunk.usage, "_cache_read_input_tokens")
+                            and chunk.usage._cache_read_input_tokens > 0
+                            else cached_tokens
+                        ),
+                        "prompt_tokens_details": {"cached_tokens": cached_tokens},
+                    }
                     merged_chunk["usage"] = usage_dict
 
                     # Queue the merged chunk and reset
@@ -323,13 +341,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
-                        # Queue the sequence: content_block_stop -> content_block_start
-                        # For text blocks the trigger chunk is not emitted as a separate
-                        # delta because content_block_start carries the information.
-                        # For tool_use blocks we must also emit the trigger chunk's delta
-                        # when it carries input_json_delta data, because some providers
-                        # (e.g. xAI, Gemini) include tool arguments in the same streaming
-                        # chunk as the function name/id.
+                        # Queue the sequence: content_block_stop -> content_block_start.
+                        # The trigger chunk's delta is re-queued via
+                        # ``_maybe_queue_trigger_delta`` so its content is not silently
+                        # dropped when switching block types (e.g. thinking -> text,
+                        # where the first text chunk carries actual text content).
 
                         # 1. Stop current content block
                         self.chunk_queue.append(
@@ -346,16 +362,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
 
-                        # 3. If the trigger chunk carries tool argument data, queue it
-                        # so the input_json_delta is not silently dropped.
-                        if (
-                            processed_chunk.get("type") == "content_block_delta"
-                            and isinstance(processed_chunk.get("delta"), dict)
-                            and processed_chunk["delta"].get("type")
-                            == "input_json_delta"
-                            and processed_chunk["delta"].get("partial_json")
-                        ):
-                            self.chunk_queue.append(processed_chunk)
+                        # 2. Re-queue the trigger chunk's delta when it carries content.
+                        self._maybe_queue_trigger_delta(processed_chunk)
 
                         # Reset state for new block
                         self.sent_content_block_finish = False
@@ -434,7 +442,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         for chunk in self:
             if isinstance(chunk, dict):
                 event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                payload = f"event: {event_type}\ndata: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                 yield payload.encode()
             else:
                 # For non-dict chunks, forward the original value unchanged
@@ -448,7 +456,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         async for chunk in self:
             if isinstance(chunk, dict):
                 event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                payload = f"event: {event_type}\ndata: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                 yield payload.encode()
             else:
                 # For non-dict chunks, forward the original value unchanged
@@ -456,6 +464,94 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
+
+    def _maybe_queue_trigger_delta(self, processed_chunk: Any) -> None:
+        """
+        When transitioning between content block types (e.g. thinking -> text),
+        the streaming chunk that triggers the transition may itself carry content
+        (e.g. the first text delta, or the first tool-call argument payload).
+
+        Previously only ``input_json_delta`` chunks with non-empty ``partial_json``
+        were re-queued after the new ``content_block_start``, causing
+        ``thinking_delta`` and ``text_delta`` content from the trigger chunk to be
+        silently dropped. This helper re-queues any ``content_block_delta`` carried
+        by the trigger chunk that has actual content so no content is lost across
+        block boundaries, while still skipping empty deltas (e.g. a tool-call name
+        chunk that arrives with ``arguments=""``).
+        """
+        if (
+            not isinstance(processed_chunk, dict)
+            or processed_chunk.get("type") != "content_block_delta"
+            or not isinstance(processed_chunk.get("delta"), dict)
+        ):
+            return
+
+        delta = processed_chunk["delta"]
+        delta_type = delta.get("type")
+
+        if delta_type == "input_json_delta":
+            # Only re-queue tool argument deltas that carry actual content.
+            if delta.get("partial_json"):
+                self.chunk_queue.append(processed_chunk)
+        elif delta_type == "thinking_delta":
+            if delta.get("thinking"):
+                self.chunk_queue.append(processed_chunk)
+        elif delta_type == "text_delta":
+            if delta.get("text"):
+                self.chunk_queue.append(processed_chunk)
+        elif delta_type == "signature_delta":
+            if delta.get("signature"):
+                self.chunk_queue.append(processed_chunk)
+
+    def _is_chunk_empty(self, chunk: "ModelResponseStream") -> bool:
+        """
+        Check if a streaming chunk carries no meaningful content that would
+        start or extend a content block.
+
+        Some providers (e.g. DeepSeek) emit a leading chunk with an empty
+        ``content=""`` string before sending reasoning. Such a chunk should
+        neither start a content block nor trigger a block transition — otherwise
+        a spurious empty "text" block appears at index 0 and pushes the real
+        content to higher indices.
+
+        A chunk is considered "empty" only when it has no tool_calls, no
+        thinking_blocks, no reasoning_content, and no (or empty) content.
+        Chunks that carry a finish_reason or usage are NOT considered empty,
+        because they signal stream completion and must be processed.
+        """
+        # Usage-only chunks (e.g. from stream_options={"include_usage": True})
+        # carry token counts even when delta is None. They must not be skipped
+        # so the merge logic has a chance to inject usage into message_delta.
+        if getattr(chunk, "usage", None) is not None:
+            return False
+        if not chunk.choices:
+            # No choices — could still carry usage/finish, don't skip.
+            return False
+        choice = chunk.choices[0]
+        # finish_reason chunks must be processed (they emit message_delta).
+        if choice.finish_reason is not None:
+            return False
+        delta = choice.delta
+        if delta is None:
+            return True
+        # Non-empty tool calls / thinking blocks keep the chunk significant.
+        if getattr(delta, "tool_calls", None):
+            return False
+        if getattr(delta, "thinking_blocks", None):
+            return False
+        # reasoning_content counts, even if it is an empty string, because its
+        # presence signals that the provider is in thinking mode.
+        if hasattr(delta, "reasoning_content") and delta.reasoning_content is not None:
+            return False
+        # content only disqualifies emptiness if it is non-empty.
+        content = getattr(delta, "content", None)
+        if content is not None and len(content) > 0:
+            return False
+        # Also treat presence of stop_reason on the delta as non-empty so that
+        # stop/done chunks are never skipped.
+        if getattr(delta, "stop_reason", None) is not None:
+            return False
+        return True
 
     def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
         """
@@ -469,9 +565,20 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         """
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        # Example logic - customize based on your needs:
+        # Usage-only chunks carry token counts (from stream_options={"include_usage": True})
+        # They do not represent content block transitions. Handle early to avoid
+        # treating them as new blocks.
+        if getattr(chunk, "usage", None) is not None and (
+            not chunk.choices or chunk.choices[0].finish_reason is None
+        ):
+            return False
+
         # If chunk indicates a tool call
         if chunk.choices[0].finish_reason is not None:
+            return False
+
+        # Skip empty leading chunks (e.g. DeepSeek's content="" opening chunk).
+        if self._is_chunk_empty(chunk):
             return False
 
         (

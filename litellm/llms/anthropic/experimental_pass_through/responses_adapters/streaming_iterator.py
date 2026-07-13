@@ -58,6 +58,7 @@ class AnthropicResponsesStreamWrapper:
                     "output_tokens": 0,
                     "cache_creation_input_tokens": 0,
                     "cache_read_input_tokens": 0,
+                    "prompt_tokens_details": {"cached_tokens": 0},
                 },
             },
         }
@@ -283,11 +284,10 @@ class AnthropicResponsesStreamWrapper:
             usage_delta: Dict[str, Any] = {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "cache_creation_input_tokens": cache_creation_tokens or 0,
+                "cache_read_input_tokens": cache_read_tokens or 0,
+                "prompt_tokens_details": {"cached_tokens": cache_read_tokens or 0},
             }
-            if cache_creation_tokens:
-                usage_delta["cache_creation_input_tokens"] = cache_creation_tokens
-            if cache_read_tokens:
-                usage_delta["cache_read_input_tokens"] = cache_read_tokens
 
             self._chunk_queue.append(
                 {

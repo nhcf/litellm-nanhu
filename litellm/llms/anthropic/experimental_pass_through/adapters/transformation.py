@@ -1079,6 +1079,31 @@ class LiteLLMAnthropicMessagesAdapter:
         else:
             new_kwargs["reasoning_effort"] = reasoning_effort
 
+        # For DeepSeek models, also generate extra_body with chat_template_kwargs
+        # format required by private DeepSeek deployments. The reasoning_effort param
+        # above is standard OpenAI format; chat_template_kwargs is the DeepSeek-specific
+        # format needed for private deployments that don't recognize reasoning_effort.
+        model_lower = model.lower()
+        if (
+            isinstance(thinking, dict)
+            and thinking.get("type") in ("enabled", "adaptive")
+            and ("deepseek" in model_lower or "deep-seek" in model_lower)
+        ):
+            chat_template_kwargs: Dict[str, Any] = {
+                "thinking": True,
+                "enable_thinking": True,
+            }
+            if isinstance(reasoning_effort, str):
+                chat_template_kwargs["reasoning_effort"] = reasoning_effort
+            elif isinstance(reasoning_effort, dict) and reasoning_effort.get("effort"):
+                chat_template_kwargs["reasoning_effort"] = reasoning_effort["effort"]
+            # Preserve relevant params from thinking (budget_tokens, etc.)
+            # but always keep type as "enabled" for compatibility
+            extra_body = dict(new_kwargs.get("extra_body", {}))
+            extra_body["chat_template_kwargs"] = chat_template_kwargs
+            extra_body["thinking"] = {"type": "enabled"}
+            new_kwargs["extra_body"] = extra_body  # type: ignore
+
     def _translate_output_format_to_openai(
         self,
         anthropic_message_request: AnthropicMessagesRequest,
@@ -1374,16 +1399,20 @@ class LiteLLMAnthropicMessagesAdapter:
         anthropic_usage = AnthropicUsage(
             input_tokens=uncached_input_tokens,
             output_tokens=usage.completion_tokens or 0,
-        )
-        if (
-            hasattr(usage, "_cache_creation_input_tokens")
-            and usage._cache_creation_input_tokens > 0
-        ):
-            anthropic_usage["cache_creation_input_tokens"] = (
+            cache_creation_input_tokens=(
                 usage._cache_creation_input_tokens
-            )
-        if cached_tokens > 0:
-            anthropic_usage["cache_read_input_tokens"] = cached_tokens
+                if hasattr(usage, "_cache_creation_input_tokens")
+                and usage._cache_creation_input_tokens > 0
+                else 0
+            ),
+            cache_read_input_tokens=(
+                usage._cache_read_input_tokens
+                if hasattr(usage, "_cache_read_input_tokens")
+                and usage._cache_read_input_tokens > 0
+                else cached_tokens
+            ),
+            prompt_tokens_details={"cached_tokens": cached_tokens},
+        )
 
         translated_obj = AnthropicMessagesResponse(
             id=response.id,
@@ -1455,6 +1484,19 @@ class LiteLLMAnthropicMessagesAdapter:
                         return "thinking", ChatCompletionThinkingBlock(
                             type="thinking", thinking=thinking, signature=signature
                         )
+            elif (
+                isinstance(choice, StreamingChoices)
+                and hasattr(choice.delta, "reasoning_content")
+                and choice.delta.reasoning_content is not None
+                and len(choice.delta.reasoning_content) > 0
+            ):
+                # Providers like DeepSeek return reasoning text via the
+                # ``reasoning_content`` delta field instead of ``thinking_blocks``.
+                # Map these to an Anthropic ``thinking`` content block so the
+                # block type, index, and block-start/stop events are emitted
+                # correctly (mirrors how ``thinking_blocks`` chunks are handled
+                # above).
+                return "thinking", {"type": "thinking", "thinking": "", "signature": ""}
 
         return "text", TextBlock(type="text", text="")
 
@@ -1536,6 +1578,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 stop_reason=self._translate_openai_finish_reason_to_anthropic(
                     response.choices[0].finish_reason
                 ),
+                stop_sequence=None,
             )
             if getattr(response, "usage", None) is not None:
                 litellm_usage_chunk: Optional[Usage] = response.usage  # type: ignore
@@ -1566,18 +1609,27 @@ class LiteLLMAnthropicMessagesAdapter:
                 usage_delta = UsageDelta(
                     input_tokens=uncached_input_tokens,
                     output_tokens=litellm_usage_chunk.completion_tokens or 0,
-                )
-                if (
-                    hasattr(litellm_usage_chunk, "_cache_creation_input_tokens")
-                    and litellm_usage_chunk._cache_creation_input_tokens > 0
-                ):
-                    usage_delta["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens=(
                         litellm_usage_chunk._cache_creation_input_tokens
-                    )
-                if cached_tokens > 0:
-                    usage_delta["cache_read_input_tokens"] = cached_tokens
+                        if hasattr(litellm_usage_chunk, "_cache_creation_input_tokens")
+                        else 0
+                    ),
+                    cache_read_input_tokens=(
+                        litellm_usage_chunk._cache_read_input_tokens
+                        if hasattr(litellm_usage_chunk, "_cache_read_input_tokens")
+                        and litellm_usage_chunk._cache_read_input_tokens > 0
+                        else cached_tokens
+                    ),
+                    prompt_tokens_details={"cached_tokens": cached_tokens},
+                )
             else:
-                usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
+                usage_delta = UsageDelta(
+                    input_tokens=0,
+                    output_tokens=0,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=0,
+                    prompt_tokens_details={"cached_tokens": 0},
+                )
             return MessageBlockDelta(
                 type="message_delta", delta=delta, usage=usage_delta  # type: ignore
             )
