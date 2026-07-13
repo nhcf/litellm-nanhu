@@ -33,9 +33,9 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert "chat_template_kwargs" in result["extra_body"]
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
-        assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
+        assert "chat_template_kwargs" in result
+        assert result["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["enable_thinking"] is True
 
     def test_map_thinking_with_budget_tokens_strips_budget(self):
         """Test that budget_tokens is stripped from thinking param (DeepSeek doesn't support it)."""
@@ -50,8 +50,8 @@ class TestDeepSeekThinkingParams:
         )
 
         # Should strip budget_tokens and generate chat_template_kwargs
-        assert "chat_template_kwargs" in result["extra_body"]
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
+        assert "chat_template_kwargs" in result
+        assert result["chat_template_kwargs"]["thinking"] is True
         assert "budget_tokens" not in result.get("extra_body", {})
 
     def test_map_reasoning_effort_medium(self):
@@ -66,8 +66,8 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "medium"
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["reasoning_effort"] == "medium"
+        assert result["chat_template_kwargs"]["thinking"] is True
 
     def test_map_reasoning_effort_low(self):
         """Test that reasoning_effort='low' generates correct chat_template_kwargs."""
@@ -81,8 +81,8 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "low"
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["reasoning_effort"] == "low"
+        assert result["chat_template_kwargs"]["thinking"] is True
 
     def test_map_reasoning_effort_high(self):
         """Test that reasoning_effort='high' generates correct chat_template_kwargs."""
@@ -96,8 +96,8 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["reasoning_effort"] == "high"
+        assert result["chat_template_kwargs"]["thinking"] is True
 
     def test_map_reasoning_effort_none_does_not_enable_thinking(self):
         """Test that reasoning_effort='none' does not enable thinking."""
@@ -111,7 +111,7 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert "thinking" not in result
+        assert result["thinking"] == {"type": "disabled"}
 
     def test_thinking_preserves_existing_extra_body(self):
         """Test that thinking is merged into existing extra_body without overwriting."""
@@ -125,7 +125,7 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["thinking"] is True
         assert result["extra_body"]["existing_key"] == "existing_value"
 
     def test_reasoning_effort_preserves_existing_extra_body(self):
@@ -140,7 +140,7 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["thinking"] is True
         assert result["extra_body"]["existing_key"] == "existing_value"
 
     # New tests for chat_template_kwargs format
@@ -156,14 +156,14 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert "chat_template_kwargs" in result["extra_body"]
+        assert "chat_template_kwargs" in result
         assert (
-            result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+            result["chat_template_kwargs"]["reasoning_effort"] == "high"
         )
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
-        assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
+        assert result["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["enable_thinking"] is True
         # Legacy thinking param should also be present
-        assert result["extra_body"]["thinking"] == {"type": "enabled"}
+        assert result["thinking"] == {"type": "enabled"}
 
     def test_chat_template_kwargs_with_reasoning_effort_max(self):
         """Test that reasoning_effort='max' generates correct chat_template_kwargs."""
@@ -177,9 +177,9 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "max"
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
-        assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
+        assert result["chat_template_kwargs"]["reasoning_effort"] == "max"
+        assert result["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["enable_thinking"] is True
 
     def test_chat_template_kwargs_with_thinking_adaptive(self):
         """Test that thinking={"type": "adaptive"} generates correct chat_template_kwargs."""
@@ -193,12 +193,12 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        # Should default to high for adaptive without reasoning_effort
+        # Should default to max for adaptive without reasoning_effort
         assert (
-            result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+            result["chat_template_kwargs"]["reasoning_effort"] == "max"
         )
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
-        assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
+        assert result["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["enable_thinking"] is True
 
     def test_chat_template_kwargs_with_thinking_adaptive_and_effort(self):
         """Test that thinking={"type": "adaptive"} with reasoning_effort generates correct chat_template_kwargs."""
@@ -215,9 +215,9 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "low"
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
-        assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
+        assert result["chat_template_kwargs"]["reasoning_effort"] == "low"
+        assert result["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["enable_thinking"] is True
 
     def test_chat_template_kwargs_with_thinking_enabled(self):
         """Test that thinking={"type": "enabled"} generates correct chat_template_kwargs."""
@@ -231,12 +231,12 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        # Should default to high for enabled without reasoning_effort
+        # Should default to max for enabled without reasoning_effort
         assert (
-            result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+            result["chat_template_kwargs"]["reasoning_effort"] == "max"
         )
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
-        assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
+        assert result["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["enable_thinking"] is True
 
     def test_chat_template_kwargs_with_thinking_enabled_and_effort(self):
         """Test thinking={"type": "enabled"} with reasoning_effort='medium'."""
@@ -254,9 +254,9 @@ class TestDeepSeekThinkingParams:
         )
 
         assert (
-            result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "medium"
+            result["chat_template_kwargs"]["reasoning_effort"] == "medium"
         )
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["thinking"] is True
 
     def test_reasoning_effort_dict_with_effort_key(self):
         """Test reasoning_effort as dict with 'effort' key (from OpenAI adapter)."""
@@ -271,9 +271,9 @@ class TestDeepSeekThinkingParams:
         )
 
         assert (
-            result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+            result["chat_template_kwargs"]["reasoning_effort"] == "high"
         )
-        assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["thinking"] is True
 
     def test_invalid_reasoning_effort_value_no_thinking(self):
         """Test that invalid reasoning_effort value does not enable thinking."""
@@ -287,11 +287,32 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert "chat_template_kwargs" not in result.get("extra_body", {})
-        assert "thinking" not in result.get("extra_body", {})
+        assert "chat_template_kwargs" not in result
+        assert "thinking" not in result
 
-    def test_thinking_disabled_no_chat_template_kwargs(self):
-        """Test that thinking={"type": "disabled"} does not generate chat_template_kwargs."""
+    def test_default_no_thinking_param_enables_thinking_with_max_effort(self):
+        """Test that when no thinking or reasoning_effort is specified,
+        thinking is enabled by default with reasoning_effort='max',
+        matching DeepSeek official API behavior."""
+        non_default_params = {}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert "chat_template_kwargs" in result
+        assert result["chat_template_kwargs"]["reasoning_effort"] == "max"
+        assert result["chat_template_kwargs"]["thinking"] is True
+        assert result["chat_template_kwargs"]["enable_thinking"] is True
+        assert result["thinking"] == {"type": "enabled"}
+
+    def test_thinking_disabled_passes_through_to_backend(self):
+        """Test that thinking={"type": "disabled"} passes through to extra_body
+        with chat_template_kwargs explicitly disabling thinking."""
         non_default_params = {"thinking": {"type": "disabled"}}
         optional_params = {}
 
@@ -302,5 +323,25 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert "chat_template_kwargs" not in result.get("extra_body", {})
-        assert "thinking" not in result.get("extra_body", {})
+        assert result["thinking"] == {"type": "disabled"}
+        assert result["chat_template_kwargs"]["reasoning_effort"] == "none"
+        assert result["chat_template_kwargs"]["thinking"] is False
+        assert result["chat_template_kwargs"]["enable_thinking"] is False
+
+    def test_reasoning_effort_none_disables_thinking(self):
+        """Test that reasoning_effort='none' explicitly disables thinking
+        with chat_template_kwargs."""
+        non_default_params = {"reasoning_effort": "none"}
+        optional_params = {}
+
+        result = self.config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=self.model,
+            drop_params=False,
+        )
+
+        assert result["thinking"] == {"type": "disabled"}
+        assert result["chat_template_kwargs"]["reasoning_effort"] == "none"
+        assert result["chat_template_kwargs"]["thinking"] is False
+        assert result["chat_template_kwargs"]["enable_thinking"] is False
