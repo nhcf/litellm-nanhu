@@ -66,16 +66,24 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                         enable_thinking = True
                         final_reasoning_effort = reasoning_effort
                     elif reasoning_effort is None:
-                        # Default to high if no reasoning_effort provided with adaptive
+                        # Default to max if no reasoning_effort provided with adaptive
                         enable_thinking = True
-                        final_reasoning_effort = "high"
+                        final_reasoning_effort = "max"
                 else:  # type == "enabled"
                     enable_thinking = True
                     final_reasoning_effort = (
                         reasoning_effort
                         if reasoning_effort in valid_effort_values
-                        else "high"
+                        else "max"
                     )
+            else:
+                # Explicitly disabled, set thinking at top level to disable
+                optional_params["thinking"] = thinking_value
+                optional_params["chat_template_kwargs"] = {
+                    "reasoning_effort": "none",
+                    "thinking": False,
+                    "enable_thinking": False,
+                }
 
         # Handle reasoning_effort alone (without thinking param)
         elif reasoning_effort is not None and reasoning_effort != "none":
@@ -90,17 +98,33 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 enable_thinking = True
                 final_reasoning_effort = reasoning_effort
 
-        # Generate chat_template_kwargs for thinking mode
-        if enable_thinking:
+        # Handle reasoning_effort="none" → explicitly disable thinking
+        elif reasoning_effort == "none":
             if "extra_body" not in optional_params:
                 optional_params["extra_body"] = {}
-            optional_params["extra_body"]["chat_template_kwargs"] = {
+            optional_params["thinking"] = {"type": "disabled"}
+            optional_params["chat_template_kwargs"] = {
+                "reasoning_effort": "none",
+                "thinking": False,
+                "enable_thinking": False,
+            }
+
+        # Default: enable thinking with reasoning_effort="max" when neither
+        # thinking nor reasoning_effort is specified, matching DeepSeek API default.
+        elif thinking_value is None and reasoning_effort is None:
+            enable_thinking = True
+            final_reasoning_effort = "max"
+
+        # Generate chat_template_kwargs for thinking mode
+        if enable_thinking:
+            optional_params["chat_template_kwargs"] = {
                 "reasoning_effort": final_reasoning_effort,
                 "thinking": True,
                 "enable_thinking": True,
             }
-            # Also keep the legacy thinking param for backward compatibility
-            optional_params["extra_body"]["thinking"] = {"type": "enabled"}
+            if "extra_body" not in optional_params:
+                optional_params["extra_body"] = {}
+            optional_params["thinking"] = {"type": "enabled"}
 
         return optional_params
 
