@@ -146,8 +146,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         DeepSeek does not support content in list format.
+        Also merges reasoning_content into content for SGLang backends that
+        do not natively process reasoning_content in input messages.
         """
         messages = handle_messages_with_content_list_to_str_conversion(messages)
+        self._merge_reasoning_content_to_content(messages)
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True
@@ -156,6 +159,33 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             return super()._transform_messages(
                 messages=messages, model=model, is_async=False
             )
+
+    @staticmethod
+    def _merge_reasoning_content_to_content(
+        messages: List[AllMessageValues],
+    ) -> None:
+        """
+        SGLang and some other DeepSeek-compatible backends ignore
+        ``reasoning_content`` in input messages when constructing the prompt.
+        This causes tool-call replay rounds to lose prior thinking context.
+
+        Workaround: prepend ``reasoning_content`` into ``content`` so the
+        model can see historical thinking text, then remove the
+        ``reasoning_content`` and ``thinking_blocks`` fields so they don't
+        leak to backends that reject unknown keys.
+        """
+        for message in messages:
+            if message.get("role") != "assistant":
+                continue
+            reasoning = message.pop("reasoning_content", None)
+            message.pop("thinking_blocks", None)
+            if not reasoning:
+                continue
+            existing_content = message.get("content")
+            if existing_content:
+                message["content"] = reasoning + "\n\n" + str(existing_content)
+            else:
+                message["content"] = reasoning
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]

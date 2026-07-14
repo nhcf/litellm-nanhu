@@ -307,6 +307,199 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def test_translate_anthropic_messages_to_openai_reasoning_content_from_thinking_blocks():
+    """thinking_blocks with thinking text produce reasoning_content
+    that is merged into assistant_content (string format)."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "What's the weather?"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "Need to call get_weather tool.",
+                    "signature": "sig1",
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"},
+                },
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert len(result) == 2
+    assert result[1]["role"] == "assistant"
+    assert result[1]["reasoning_content"] == "Need to call get_weather tool."
+    # When only tool_use follows thinking (no text block), assistant_content
+    # ends up as empty string, which is falsy → falls to content=reasoning only.
+    assert result[1]["content"] == "Need to call get_weather tool."
+    assert "tool_calls" in result[1]
+
+
+def test_translate_anthropic_messages_to_openai_reasoning_content_list_content():
+    """When assistant_content is a list (e.g. has cache_control), reasoning
+    is prepended as a text block. Requires a Claude model so cache_control
+    is preserved by _add_cache_control_if_applicable."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Query"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "Private reasoning about the answer.",
+                    "signature": "sig2",
+                },
+                {
+                    "type": "text",
+                    "text": "The weather is sunny.",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages,
+        model="claude-sonnet-4-5",
+    )
+
+    assert result[1]["role"] == "assistant"
+    assert result[1]["reasoning_content"] == "Private reasoning about the answer."
+    content = result[1]["content"]
+    assert isinstance(content, list)
+    assert content[0] == {"type": "text", "text": "Private reasoning about the answer."}
+    assert content[1]["text"] == "The weather is sunny."
+
+
+def test_translate_anthropic_messages_to_openai_reasoning_content_no_content():
+    """When assistant has only thinking blocks (no text or tool_use),
+    reasoning_content becomes the sole content."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Think about this."}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "Let me think carefully...",
+                    "signature": "sig3",
+                },
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert result[1]["role"] == "assistant"
+    assert result[1]["reasoning_content"] == "Let me think carefully..."
+    assert result[1]["content"] == "Let me think carefully..."
+
+
+def test_translate_anthropic_messages_to_openai_no_thinking_blocks_no_reasoning():
+    """Without thinking_blocks, reasoning_content must not be set and
+    content must be unchanged."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Hello"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "text", "text": "Hi there!"}],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert result[1]["role"] == "assistant"
+    assert result[1].get("reasoning_content") is None
+    assert result[1]["content"] == "Hi there!"
+
+
+def test_translate_anthropic_messages_to_openai_reasoning_content_multiple_thinking_blocks():
+    """Multiple thinking blocks should be concatenated into a single reasoning_content."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Solve this."}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "First, let me analyze the problem.",
+                    "signature": "sig_a",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Then, I will formulate a solution.",
+                    "signature": "sig_b",
+                },
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    expected_reasoning = "First, let me analyze the problem.Then, I will formulate a solution."
+    assert result[1]["reasoning_content"] == expected_reasoning
+    assert result[1]["content"] == expected_reasoning
+
+
+def test_translate_anthropic_messages_to_openai_mixed_thinking_and_redacted():
+    """Only thinking blocks (not redacted_thinking) contribute to reasoning_content."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Query"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "thinking",
+                    "thinking": "Visible reasoning.",
+                    "signature": "sig",
+                },
+                {"type": "redacted_thinking", "data": "REDACTED"},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_02",
+                    "name": "search",
+                    "input": {"q": "test"},
+                },
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert result[1]["reasoning_content"] == "Visible reasoning."
+    assert "Visible reasoning." in result[1]["content"]
+
+
 def test_translate_anthropic_messages_to_openai_tool_message_placement():
     """Test that tool result messages are placed before user messages in the conversation order."""
 

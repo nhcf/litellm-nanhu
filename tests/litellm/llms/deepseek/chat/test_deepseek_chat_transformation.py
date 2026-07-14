@@ -4,8 +4,144 @@ Unit tests for DeepSeek chat transformation.
 Tests the thinking and reasoning_effort parameter handling for DeepSeek models.
 """
 
+from copy import deepcopy
+from typing import Any, Dict, List
+
 import pytest
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+
+
+class TestMergeReasoningContentToContent:
+    """Tests for _merge_reasoning_content_to_content static method.
+
+    This method ensures SGLang and similar backends that ignore
+    ``reasoning_content`` in input messages can still render historical
+    thinking during tool-call replay rounds.
+    """
+
+    def test_merges_reasoning_content_into_content_string(self):
+        messages: List[Dict[str, Any]] = [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": "tool call text",
+                "reasoning_content": "private thinking here",
+                "thinking_blocks": [{"type": "thinking", "thinking": "private thinking here"}],
+            },
+        ]
+        original_user_msg = deepcopy(messages[0])
+
+        DeepSeekChatConfig._merge_reasoning_content_to_content(messages)
+
+        assert messages[0] == original_user_msg
+        assert messages[1]["content"] == "private thinking here\n\ntool call text"
+        assert "reasoning_content" not in messages[1]
+        assert "thinking_blocks" not in messages[1]
+
+    def test_merges_reasoning_content_when_no_existing_content(self):
+        messages: List[Dict[str, Any]] = [
+            {
+                "role": "assistant",
+                "reasoning_content": "only thinking",
+                "thinking_blocks": [{"type": "thinking", "thinking": "only thinking"}],
+            },
+        ]
+
+        DeepSeekChatConfig._merge_reasoning_content_to_content(messages)
+
+        assert messages[0]["content"] == "only thinking"
+        assert "reasoning_content" not in messages[0]
+
+    def test_skips_non_assistant_messages(self):
+        messages: List[Dict[str, Any]] = [
+            {"role": "user", "content": "question", "reasoning_content": "should be kept"},
+            {
+                "role": "assistant",
+                "content": "answer",
+                "reasoning_content": "assistant thinking",
+            },
+        ]
+
+        DeepSeekChatConfig._merge_reasoning_content_to_content(messages)
+
+        # Non-assistant messages are untouched
+        assert messages[0] == {"role": "user", "content": "question", "reasoning_content": "should be kept"}
+        assert messages[1]["content"] == "assistant thinking\n\nanswer"
+        assert "reasoning_content" not in messages[1]
+
+    def test_skips_messages_without_reasoning_content(self):
+        messages: List[Dict[str, Any]] = [
+            {"role": "assistant", "content": "plain answer"},
+        ]
+
+        DeepSeekChatConfig._merge_reasoning_content_to_content(messages)
+
+        assert messages[0] == {"role": "assistant", "content": "plain answer"}
+
+    def test_removes_thinking_blocks_even_without_reasoning_content(self):
+        messages: List[Dict[str, Any]] = [
+            {
+                "role": "assistant",
+                "content": "answer",
+                "thinking_blocks": [{"type": "thinking", "thinking": "ignored"}],
+            },
+        ]
+
+        DeepSeekChatConfig._merge_reasoning_content_to_content(messages)
+
+        assert "thinking_blocks" not in messages[0]
+        assert messages[0]["content"] == "answer"
+
+    def test_empty_string_reasoning_content_not_merged(self):
+        messages: List[Dict[str, Any]] = [
+            {"role": "assistant", "content": "answer", "reasoning_content": ""},
+        ]
+
+        DeepSeekChatConfig._merge_reasoning_content_to_content(messages)
+
+        assert messages[0]["content"] == "answer"
+        assert "reasoning_content" not in messages[0]
+
+    def test_tool_call_replay_scenario(self):
+        """Simulate the exact scenario from BUG_REPORT.md: a tool-call round
+        where the assistant message has thinking + tool_use."""
+        messages: List[Dict[str, Any]] = [
+            {"role": "user", "content": "Think privately, then call the note tool with x=hello."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "REF-TEST-1234. Now I will call the note tool."},
+                    {"type": "tool_use", "id": "toolu_probe", "name": "note", "input": {"x": "hello"}},
+                ],
+                "reasoning_content": "REF-TEST-1234. Now I will call the note tool.",
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "REF-TEST-1234. Now I will call the note tool."},
+                ],
+            },
+        ]
+
+        DeepSeekChatConfig._merge_reasoning_content_to_content(messages)
+
+        assert "reasoning_content" not in messages[1]
+        assert "thinking_blocks" not in messages[1]
+        assert "REF-TEST-1234" in messages[1]["content"]
+
+    def test_preserves_system_messages(self):
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "query"},
+            {
+                "role": "assistant",
+                "content": "result",
+                "reasoning_content": "thinking...",
+            },
+        ]
+
+        DeepSeekChatConfig._merge_reasoning_content_to_content(messages)
+
+        assert messages[0] == {"role": "system", "content": "You are a helpful assistant."}
+        assert messages[1] == {"role": "user", "content": "query"}
+        assert messages[2]["content"] == "thinking...\n\nresult"
 
 
 class TestDeepSeekThinkingParams:

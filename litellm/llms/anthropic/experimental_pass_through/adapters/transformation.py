@@ -650,9 +650,34 @@ class LiteLLMAnthropicMessagesAdapter:
                 else:
                     assistant_content = assistant_message_str
 
+                reasoning_content: Optional[str] = None
+                if thinking_blocks:
+                    parts: list[str] = []
+                    for block in thinking_blocks:
+                        if isinstance(block, dict) and block.get("type") == "thinking":
+                            text = block.get("thinking") or ""
+                            if text:
+                                parts.append(text)
+                    if parts:
+                        reasoning_content = "".join(parts)
+
+                # Merge reasoning_content into content so that backends
+                # which ignore reasoning_content in input messages (e.g.
+                # SGLang) can still render historical thinking into the
+                # prompt during tool-call replay rounds.
+                if reasoning_content:
+                    if assistant_content:
+                        if isinstance(assistant_content, list):
+                            assistant_content = [{"type": "text", "text": reasoning_content}] + assistant_content
+                        else:
+                            assistant_content = reasoning_content + "\n\n" + str(assistant_content)
+                    else:
+                        assistant_content = reasoning_content
+
                 assistant_message = ChatCompletionAssistantMessage(
                     role="assistant",
                     content=assistant_content,
+                    reasoning_content=reasoning_content,
                     thinking_blocks=(
                         thinking_blocks if len(thinking_blocks) > 0 else None
                     ),
@@ -1033,8 +1058,17 @@ class LiteLLMAnthropicMessagesAdapter:
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
     ) -> None:
-        """Translate Anthropic thinking to either thinking or reasoning_effort."""
+        """Translate Anthropic thinking to either thinking or reasoning_effort.
+
+        For non-Claude DeepSeek models: if no thinking param is provided,
+        default to reasoning_effort='max' to match DeepSeek API behavior.
+        The only case where thinking is NOT enabled is when the user
+        explicitly passes thinking={'type': 'disabled'}.
+        """
         if "thinking" not in anthropic_message_request:
+            model = new_kwargs.get("model", "")
+            if not self.is_anthropic_claude_model(model):
+                new_kwargs["reasoning_effort"] = "max"
             return
 
         thinking = anthropic_message_request["thinking"]
@@ -1052,8 +1086,8 @@ class LiteLLMAnthropicMessagesAdapter:
         if not reasoning_effort:
             return
 
-        # For adaptive thinking, override with output_config.effort if available
-        if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+        # Override with output_config.effort if available
+        if isinstance(thinking, dict) and thinking.get("type") in ("enabled", "adaptive"):
             output_config = anthropic_message_request.get("output_config")
             if isinstance(output_config, dict) and output_config.get("effort"):
                 reasoning_effort = output_config["effort"]
