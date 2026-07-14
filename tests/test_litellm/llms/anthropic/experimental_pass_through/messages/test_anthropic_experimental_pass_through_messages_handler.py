@@ -14,6 +14,58 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices
 
 
+def test_messages_handler_default_enables_thinking_for_deepseek():
+    """
+    When no thinking param is passed and the model is DeepSeek (non-Claude),
+    the transformation should enable thinking with reasoning_effort='max'
+    by default — matching DeepSeek official API behavior.
+
+    The only case where thinking is NOT enabled is when the user explicitly
+    passes thinking={'type': 'disabled'}.
+    """
+    from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+
+    config = DeepSeekChatConfig()
+    result = config.map_openai_params(
+        non_default_params={},
+        optional_params={},
+        model="deepseek-reasoner",
+        drop_params=False,
+    )
+
+    assert "chat_template_kwargs" in result
+    assert result["chat_template_kwargs"]["reasoning_effort"] == "max"
+    assert result["chat_template_kwargs"]["thinking"] is True
+    assert result["chat_template_kwargs"]["enable_thinking"] is True
+    assert result["thinking"] == {"type": "enabled"}
+
+
+def test_messages_handler_effort_max_enables_thinking():
+    """
+    When output_config={'effort': 'max'} is passed, thinking must be enabled
+    even if no explicit thinking param is provided.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    request = AnthropicMessagesRequest(
+        model="deepseek-v4-flash",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=1024,
+        thinking={"type": "enabled"},
+        output_config={"effort": "max"},
+    )
+    openai_kwargs, _ = adapter.translate_anthropic_to_openai(request)
+    re = openai_kwargs.get("reasoning_effort")
+    if isinstance(re, dict):
+        assert re["effort"] == "max"
+    else:
+        assert re == "max"
+
+
 def test_anthropic_experimental_pass_through_messages_handler():
     """
     Test that api key is passed to litellm.responses for OpenAI models.
@@ -499,3 +551,53 @@ class TestThinkingSummaryPreservation:
         assert result == {
             "reasoning_effort": {"effort": "medium", "summary": "concise"}
         }
+
+
+def test_thinking_disabled_is_only_case_without_thinking():
+    """
+    The ONLY scenario where thinking is NOT enabled is when the user
+    explicitly passes thinking={'type': 'disabled'}. All other cases
+    (no param, effort:max, adaptive, etc.) must enable thinking.
+    """
+    from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+
+    config = DeepSeekChatConfig()
+
+    # Explicitly disabled → no thinking
+    result_disabled = config.map_openai_params(
+        non_default_params={"thinking": {"type": "disabled"}},
+        optional_params={},
+        model="deepseek-reasoner",
+        drop_params=False,
+    )
+    assert result_disabled["thinking"] == {"type": "disabled"}
+    assert result_disabled["chat_template_kwargs"]["thinking"] is False
+    assert result_disabled["chat_template_kwargs"]["enable_thinking"] is False
+
+    # Default (no params) → thinking enabled
+    result_default = config.map_openai_params(
+        non_default_params={},
+        optional_params={},
+        model="deepseek-reasoner",
+        drop_params=False,
+    )
+    assert result_default["chat_template_kwargs"]["thinking"] is True
+
+    # effort:max alone enables thinking (DeepSeekChatConfig layer)
+    result_effort = config.map_openai_params(
+        non_default_params={"reasoning_effort": "max"},
+        optional_params={},
+        model="deepseek-reasoner",
+        drop_params=False,
+    )
+    assert result_effort["chat_template_kwargs"]["thinking"] is True
+
+    # reasoning_effort='none' → explicitly disabled
+    result_none = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model="deepseek-reasoner",
+        drop_params=False,
+    )
+    assert result_none["thinking"] == {"type": "disabled"}
+    assert result_none["chat_template_kwargs"]["thinking"] is False

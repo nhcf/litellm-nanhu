@@ -285,3 +285,92 @@ class TestAdapterAdaptiveThinking:
         )
         assert result is not None
         assert result["effort"] == "medium"
+
+
+class TestEnabledThinkingWithOutputConfig:
+    """Tests for thinking.type='enabled' + output_config.effort override.
+
+    The adapter now supports output_config.effort overriding reasoning_effort
+    for both 'enabled' and 'adaptive' thinking types (previously only 'adaptive').
+    """
+
+    def test_enabled_thinking_overridden_by_output_config_effort(self):
+        """thinking.type='enabled' + output_config.effort='max' should use 'max'."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+        from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+        adapter = LiteLLMAnthropicMessagesAdapter()
+        request = AnthropicMessagesRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=1024,
+            thinking={"type": "enabled"},
+            output_config={"effort": "max"},
+        )
+        openai_kwargs, _ = adapter.translate_anthropic_to_openai(request)
+        re = openai_kwargs.get("reasoning_effort")
+        if isinstance(re, dict):
+            assert re["effort"] == "max"
+        else:
+            assert re == "max"
+
+    def test_enabled_thinking_overridden_by_output_config_effort_high(self):
+        """thinking.type='enabled' + output_config.effort='high' should use 'high'."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+        from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+        adapter = LiteLLMAnthropicMessagesAdapter()
+        request = AnthropicMessagesRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=1024,
+            thinking={"type": "enabled", "budget_tokens": 8000},
+            output_config={"effort": "high"},
+        )
+        openai_kwargs, _ = adapter.translate_anthropic_to_openai(request)
+        re = openai_kwargs.get("reasoning_effort")
+        assert re == "high"
+
+    def test_enabled_thinking_without_output_config_uses_budget_translation(self):
+        """thinking.type='enabled' without output_config uses budget_tokens mapping."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+        from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+        adapter = LiteLLMAnthropicMessagesAdapter()
+        request = AnthropicMessagesRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=1024,
+            thinking={"type": "enabled", "budget_tokens": 10000},
+        )
+        openai_kwargs, _ = adapter.translate_anthropic_to_openai(request)
+        # budget_tokens >= 10000 → 'high'
+        assert openai_kwargs.get("reasoning_effort") == "high"
+
+    def test_adaptive_thinking_still_overridden_by_output_config(self):
+        """Regression: adaptive thinking + output_config.effort still works."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+        from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+        adapter = LiteLLMAnthropicMessagesAdapter()
+        request = AnthropicMessagesRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=1024,
+            thinking={"type": "adaptive"},
+            output_config={"effort": "low"},
+        )
+        openai_kwargs, _ = adapter.translate_anthropic_to_openai(request)
+        re = openai_kwargs.get("reasoning_effort")
+        if isinstance(re, dict):
+            assert re["effort"] == "low"
+        else:
+            assert re == "low"
