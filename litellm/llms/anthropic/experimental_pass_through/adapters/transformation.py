@@ -712,7 +712,7 @@ class LiteLLMAnthropicMessagesAdapter:
         thinking_type = thinking.get("type", "disabled")
 
         if thinking_type == "disabled":
-            return None
+            return "none"
         elif thinking_type == "enabled":
             budget_tokens = thinking.get("budget_tokens", 0)
             if budget_tokens >= 10000:
@@ -1084,6 +1084,9 @@ class LiteLLMAnthropicMessagesAdapter:
             cast(Dict[str, Any], thinking)
         )
         if not reasoning_effort:
+            # User explicitly disabled thinking (e.g. thinking={"type":"disabled"}).
+            # Set reasoning_effort="none" so downstream map_openai_params sees it.
+            new_kwargs["reasoning_effort"] = "none"
             return
 
         # Override with output_config.effort if available
