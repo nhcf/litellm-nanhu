@@ -1131,9 +1131,17 @@ class LiteLLMAnthropicMessagesAdapter:
                 "enable_thinking": True,
             }
             if isinstance(reasoning_effort, str):
-                chat_template_kwargs["reasoning_effort"] = reasoning_effort
+                # Normalize per DeepSeek official docs: low/medium→high, xhigh→max
+                _EFFORT_NORMALIZE = {"low": "high", "medium": "high", "xhigh": "max"}
+                chat_template_kwargs["reasoning_effort"] = _EFFORT_NORMALIZE.get(
+                    reasoning_effort, reasoning_effort
+                )
             elif isinstance(reasoning_effort, dict) and reasoning_effort.get("effort"):
-                chat_template_kwargs["reasoning_effort"] = reasoning_effort["effort"]
+                effort = reasoning_effort["effort"]
+                _EFFORT_NORMALIZE = {"low": "high", "medium": "high", "xhigh": "max"}
+                chat_template_kwargs["reasoning_effort"] = _EFFORT_NORMALIZE.get(
+                    effort, effort
+                )
             # Preserve relevant params from thinking (budget_tokens, etc.)
             # but always keep type as "enabled" for compatibility
             extra_body = dict(new_kwargs.get("extra_body", {}))

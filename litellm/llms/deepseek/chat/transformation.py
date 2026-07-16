@@ -53,7 +53,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         final_reasoning_effort = None
 
         # Valid reasoning_effort values for chat_template_kwargs
-        valid_effort_values = {"low", "medium", "high", "max"}
+        # Per DeepSeek official docs: low/medium are mapped to high for compatibility,
+        # xhigh is mapped to max.
+        valid_effort_values = {"low", "medium", "high", "max", "xhigh"}
+
+        _EFFORT_NORMALIZE = {"low": "high", "medium": "high", "xhigh": "max"}
 
         # Handle thinking parameter
         if thinking_value is not None and isinstance(thinking_value, dict):
@@ -114,6 +118,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         elif thinking_value is None and reasoning_effort is None:
             enable_thinking = True
             final_reasoning_effort = "max"
+
+        # Normalize reasoning_effort per DeepSeek official docs:
+        # low/medium → high, xhigh → max
+        if final_reasoning_effort and final_reasoning_effort in _EFFORT_NORMALIZE:
+            final_reasoning_effort = _EFFORT_NORMALIZE[final_reasoning_effort]
 
         # Generate chat_template_kwargs for thinking mode
         if enable_thinking:
