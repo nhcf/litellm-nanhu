@@ -19,7 +19,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         DeepSeek reasoner models support thinking parameter.
         """
         params = super().get_supported_openai_params(model)
-        params.extend(["thinking", "reasoning_effort"])
+        params.extend(["thinking", "reasoning_effort", "chat_template_kwargs"])
         return params
 
     def map_openai_params(
@@ -43,10 +43,19 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             non_default_params, optional_params, model, drop_params
         )
 
-        # Pop thinking/reasoning_effort from optional_params first (parent may have added them)
-        # Then re-add only if valid for DeepSeek
-        thinking_value = optional_params.pop("thinking", None)
-        reasoning_effort = optional_params.pop("reasoning_effort", None)
+        # Pop thinking/reasoning_effort/chat_template_kwargs from optional_params
+        # (parent may have added them). Fall back to non_default_params because the
+        # parent's _handle_deepseek_thinking_params may have consumed them from
+        # optional_params without forwarding (e.g. reasoning_effort="none" is
+        # popped but not re-added by the parent).
+        thinking_value = optional_params.pop("thinking", None) or non_default_params.get("thinking")
+        reasoning_effort = optional_params.pop("reasoning_effort", None) or non_default_params.get("reasoning_effort")
+        user_chat_template_kwargs = optional_params.pop("chat_template_kwargs", None) or non_default_params.get("chat_template_kwargs") or {}
+        user_chat_template_kwargs = (
+            user_chat_template_kwargs
+            if isinstance(user_chat_template_kwargs, dict)
+            else {}
+        )
 
         # Determine if thinking mode should be enabled and get reasoning_effort value
         enable_thinking = False
@@ -70,24 +79,30 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                         enable_thinking = True
                         final_reasoning_effort = reasoning_effort
                     elif reasoning_effort is None:
-                        # Default to max if no reasoning_effort provided with adaptive
+                        # Default to high for chat/completions (regular requests);
+                        # /v1/messages agent requests default to max via adapter.
                         enable_thinking = True
-                        final_reasoning_effort = "max"
+                        final_reasoning_effort = "high"
                 else:  # type == "enabled"
                     enable_thinking = True
                     final_reasoning_effort = (
                         reasoning_effort
                         if reasoning_effort in valid_effort_values
-                        else "max"
+                        else "high"
                     )
             else:
-                # Explicitly disabled, set thinking at top level to disable
-                optional_params["thinking"] = thinking_value
-                optional_params["chat_template_kwargs"] = {
+                # Explicitly disabled - place in extra_body so the OpenAI SDK
+                # unpacks them to the top-level HTTP body for the SGLang backend.
+                if "extra_body" not in optional_params:
+                    optional_params["extra_body"] = {}
+                optional_params["extra_body"]["thinking"] = thinking_value
+                generated = {
                     "reasoning_effort": "none",
                     "thinking": False,
                     "enable_thinking": False,
                 }
+                generated.update(user_chat_template_kwargs)
+                optional_params["extra_body"]["chat_template_kwargs"] = generated
 
         # Handle reasoning_effort alone (without thinking param)
         elif reasoning_effort is not None and reasoning_effort != "none":
@@ -106,35 +121,83 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         elif reasoning_effort == "none":
             if "extra_body" not in optional_params:
                 optional_params["extra_body"] = {}
-            optional_params["thinking"] = {"type": "disabled"}
-            optional_params["chat_template_kwargs"] = {
+            optional_params["extra_body"]["thinking"] = {"type": "disabled"}
+            generated = {
                 "reasoning_effort": "none",
                 "thinking": False,
                 "enable_thinking": False,
             }
+            generated.update(user_chat_template_kwargs)
+            optional_params["extra_body"]["chat_template_kwargs"] = generated
 
-        # Default: enable thinking with reasoning_effort="max" when neither
-        # thinking nor reasoning_effort is specified, matching DeepSeek API default.
+        # Default: enable thinking with reasoning_effort="high" when neither
+        # thinking nor reasoning_effort is specified.
+        # /v1/messages agent requests default to "max" via the adapter path.
+        # Respect explicit user overrides in chat_template_kwargs if provided.
         elif thinking_value is None and reasoning_effort is None:
-            enable_thinking = True
-            final_reasoning_effort = "max"
+            user_thinking = user_chat_template_kwargs.get("thinking")
+            user_enable = user_chat_template_kwargs.get("enable_thinking")
+            if user_thinking is False or user_enable is False:
+                enable_thinking = False
+            else:
+                enable_thinking = True
+                final_reasoning_effort = user_chat_template_kwargs.get(
+                    "reasoning_effort", "high"
+                )
 
         # Normalize reasoning_effort per DeepSeek official docs:
         # low/medium → high, xhigh → max
         if final_reasoning_effort and final_reasoning_effort in _EFFORT_NORMALIZE:
             final_reasoning_effort = _EFFORT_NORMALIZE[final_reasoning_effort]
 
-        # Generate chat_template_kwargs for thinking mode
+        # If user explicitly set thinking=false or enable_thinking=false in
+        # chat_template_kwargs, respect that — don't auto-enable thinking.
+        if user_chat_template_kwargs.get("thinking") is False or user_chat_template_kwargs.get("enable_thinking") is False:
+            enable_thinking = False
+
+        # Generate chat_template_kwargs for thinking mode.
+        # Merge with any user-provided values so callers can override
+        # individual keys (e.g. reasoning_effort="high", thinking=False).
+        # IMPORTANT: chat_template_kwargs and thinking are placed inside
+        # extra_body because the OpenAI Python SDK treats unknown top-level
+        # kwargs as extra_body content. The SDK unpacks extra_body keys into
+        # the HTTP request body, placing them at the top level where the
+        # SGLang backend expects them.
         if enable_thinking:
-            optional_params["chat_template_kwargs"] = {
+            if "extra_body" not in optional_params:
+                optional_params["extra_body"] = {}
+            generated = {
                 "reasoning_effort": final_reasoning_effort,
                 "thinking": True,
                 "enable_thinking": True,
             }
+            generated.update(user_chat_template_kwargs)
+            optional_params["extra_body"]["chat_template_kwargs"] = generated
+            optional_params["extra_body"]["thinking"] = {"type": "enabled"}
+        elif user_chat_template_kwargs:
+            # User provided chat_template_kwargs but thinking is not being
+            # auto-enabled (e.g. user set thinking=false explicitly).
             if "extra_body" not in optional_params:
                 optional_params["extra_body"] = {}
-            optional_params["thinking"] = {"type": "enabled"}
+            if user_chat_template_kwargs.get("thinking") is False or user_chat_template_kwargs.get("enable_thinking") is False:
+                # Explicit disable via chat_template_kwargs: fill the full
+                # disable triple — the SGLang chat template ignores a lone
+                # thinking=false without reasoning_effort="none".
+                generated = {
+                    "reasoning_effort": "none",
+                    "thinking": False,
+                    "enable_thinking": False,
+                }
+                generated.update(user_chat_template_kwargs)
+                optional_params["extra_body"]["chat_template_kwargs"] = generated
+                optional_params["extra_body"]["thinking"] = {"type": "disabled"}
+            else:
+                optional_params["extra_body"]["chat_template_kwargs"] = user_chat_template_kwargs
 
+        # The SGLang backend only respects chat_template_kwargs for thinking
+        # control. Top-level reasoning_effort with values "max"/"xhigh" causes
+        # HTTP 400 from the backend, and other values ("high"/"none") are
+        # silently ignored. So we rely solely on chat_template_kwargs above.
         return optional_params
 
     @overload

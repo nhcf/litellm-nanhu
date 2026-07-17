@@ -1089,11 +1089,15 @@ class LiteLLMAnthropicMessagesAdapter:
             new_kwargs["reasoning_effort"] = "none"
             return
 
-        # Override with output_config.effort if available
+        # Override with output_config.effort if available.
+        # For DeepSeek models on /v1/messages (agent requests), default to
+        # "max" when no explicit effort is provided.
         if isinstance(thinking, dict) and thinking.get("type") in ("enabled", "adaptive"):
             output_config = anthropic_message_request.get("output_config")
             if isinstance(output_config, dict) and output_config.get("effort"):
                 reasoning_effort = output_config["effort"]
+            elif "deepseek" in model.lower() or "deep-seek" in model.lower():
+                reasoning_effort = "max"
 
         summary = thinking.get("summary") if isinstance(thinking, dict) else None
         auto_summary = is_reasoning_auto_summary_enabled()
@@ -1115,39 +1119,6 @@ class LiteLLMAnthropicMessagesAdapter:
             )
         else:
             new_kwargs["reasoning_effort"] = reasoning_effort
-
-        # For DeepSeek models, also generate extra_body with chat_template_kwargs
-        # format required by private DeepSeek deployments. The reasoning_effort param
-        # above is standard OpenAI format; chat_template_kwargs is the DeepSeek-specific
-        # format needed for private deployments that don't recognize reasoning_effort.
-        model_lower = model.lower()
-        if (
-            isinstance(thinking, dict)
-            and thinking.get("type") in ("enabled", "adaptive")
-            and ("deepseek" in model_lower or "deep-seek" in model_lower)
-        ):
-            chat_template_kwargs: Dict[str, Any] = {
-                "thinking": True,
-                "enable_thinking": True,
-            }
-            if isinstance(reasoning_effort, str):
-                # Normalize per DeepSeek official docs: low/medium→high, xhigh→max
-                _EFFORT_NORMALIZE = {"low": "high", "medium": "high", "xhigh": "max"}
-                chat_template_kwargs["reasoning_effort"] = _EFFORT_NORMALIZE.get(
-                    reasoning_effort, reasoning_effort
-                )
-            elif isinstance(reasoning_effort, dict) and reasoning_effort.get("effort"):
-                effort = reasoning_effort["effort"]
-                _EFFORT_NORMALIZE = {"low": "high", "medium": "high", "xhigh": "max"}
-                chat_template_kwargs["reasoning_effort"] = _EFFORT_NORMALIZE.get(
-                    effort, effort
-                )
-            # Preserve relevant params from thinking (budget_tokens, etc.)
-            # but always keep type as "enabled" for compatibility
-            extra_body = dict(new_kwargs.get("extra_body", {}))
-            extra_body["chat_template_kwargs"] = chat_template_kwargs
-            extra_body["thinking"] = {"type": "enabled"}
-            new_kwargs["extra_body"] = extra_body  # type: ignore
 
     def _translate_output_format_to_openai(
         self,
