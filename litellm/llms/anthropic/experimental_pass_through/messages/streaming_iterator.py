@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from typing import Any, AsyncIterator, List, Union
 
+from litellm.litellm_core_utils.async_stream_cleanup import close_stream
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -107,12 +108,15 @@ class BaseAnthropicMessagesStreamingIterator:
         """
         collected_chunks = []
 
-        async for chunk in completion_stream:
-            if self.completion_start_time is None:
-                self.completion_start_time = datetime.now()
-            encoded_chunk = self._convert_chunk_to_sse_format(chunk)
-            collected_chunks.append(encoded_chunk)
-            yield encoded_chunk
+        try:
+            async for chunk in completion_stream:
+                if self.completion_start_time is None:
+                    self.completion_start_time = datetime.now()
+                encoded_chunk = self._convert_chunk_to_sse_format(chunk)
+                collected_chunks.append(encoded_chunk)
+                yield encoded_chunk
 
-        # Handle logging after all chunks are processed
-        await self._handle_streaming_logging(collected_chunks)
+            # Handle logging after all chunks are processed
+            await self._handle_streaming_logging(collected_chunks)
+        finally:
+            await close_stream(completion_stream)

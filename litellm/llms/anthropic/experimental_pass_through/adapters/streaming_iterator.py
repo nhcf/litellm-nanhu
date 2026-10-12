@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Literal, O
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.async_stream_cleanup import close_stream
 from litellm.types.llms.anthropic import UsageDelta
 from litellm.types.utils import AdapterCompletionStreamWrapper
 
@@ -51,8 +52,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     ):
         super().__init__(completion_stream)
         self.model = model
+        self._closed = False
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
+
+    async def aclose(self) -> None:
+        if not self._closed:
+            self._closed = True
+            await close_stream(self.completion_stream)
 
     def _create_initial_usage_delta(self) -> UsageDelta:
         """
@@ -453,14 +460,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Async version of anthropic_sse_wrapper.
         Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
         """
-        async for chunk in self:
-            if isinstance(chunk, dict):
-                event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                yield payload.encode()
-            else:
-                # For non-dict chunks, forward the original value unchanged
-                yield chunk
+        try:
+            async for chunk in self:
+                if isinstance(chunk, dict):
+                    event_type: str = str(chunk.get("type", "message"))
+                    payload = f"event: {event_type}\ndata: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    yield payload.encode()
+                else:
+                    # For non-dict chunks, forward the original value unchanged
+                    yield chunk
+        finally:
+            await self.aclose()
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1

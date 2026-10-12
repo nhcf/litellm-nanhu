@@ -21,6 +21,9 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette._utils import collapse_excgroups
+from starlette.requests import ClientDisconnect
+from starlette.types import Receive, Scope, Send
 
 import litellm
 from litellm._logging import _redact_string, verbose_proxy_logger
@@ -34,6 +37,7 @@ from litellm.constants import (
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.async_stream_cleanup import close_stream
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -233,6 +237,54 @@ def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
     return default_error
 
 
+async def _combined_streaming_generator(
+    generator: AsyncGenerator[str, None], first_chunk_value: Optional[str]
+) -> AsyncGenerator[str, None]:
+    try:
+        if first_chunk_value is not None:
+            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+                yield first_chunk_value
+        async for chunk in generator:
+            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+                yield chunk
+    finally:
+        await close_stream(generator)
+
+
+class _ClosingStreamingResponse(StreamingResponse):
+    """Close prefetched streams after the ASGI sender/listener tasks have stopped."""
+
+    def __init__(self, *args: Any, upstream_iterator: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._upstream_iterator = upstream_iterator
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            # Always listen for disconnects, including ASGI 2.4. Waiting for a
+            # send() error alone leaves stalled/queued upstream requests alive.
+            with collapse_excgroups():
+                async with anyio.create_task_group() as task_group:
+
+                    async def stream_response() -> None:
+                        try:
+                            await self.stream_response(send)
+                        except OSError as exc:
+                            raise ClientDisconnect() from exc
+                        finally:
+                            task_group.cancel_scope.cancel()
+
+                    task_group.start_soon(stream_response)
+                    await self.listen_for_disconnect(receive)
+                    task_group.cancel_scope.cancel()
+        finally:
+            # Cancellation can happen in send(), while the generator is suspended
+            # at yield, or before its first iteration. Neither runs its finally.
+            await close_stream(self.body_iterator)
+            await close_stream(self._upstream_iterator)
+        if self.background is not None:
+            await self.background()
+
+
 async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
@@ -272,10 +324,7 @@ async def create_response(
                     error_dict = _extract_error_from_sse_chunk(first_chunk_value)
 
                     # Consume and close generator (avoid resource leak)
-                    try:
-                        await generator.aclose()
-                    except Exception:
-                        pass
+                    await close_stream(generator)
 
                     # Return JSON format error response
                     return JSONResponse(
@@ -287,6 +336,8 @@ async def create_response(
                 verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
 
     except StopAsyncIteration:
+        await close_stream(generator)
+
         # Generator was empty. Default status
         async def empty_gen() -> AsyncGenerator[str, None]:
             if False:
@@ -298,7 +349,11 @@ async def create_response(
             headers=headers,
             status_code=default_status_code,
         )
+    except asyncio.CancelledError:
+        await close_stream(generator)
+        raise
     except Exception as e:
+        await close_stream(generator)
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.exception(
             f"Error consuming first chunk from generator: {e}"
@@ -337,16 +392,9 @@ async def create_response(
             status_code=error_status,
         )
 
-    async def combined_generator() -> AsyncGenerator[str, None]:
-        if first_chunk_value is not None:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
-                yield first_chunk_value
-        async for chunk in generator:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
-                yield chunk
-
-    return StreamingResponse(
-        combined_generator(),
+    return _ClosingStreamingResponse(
+        _combined_streaming_generator(generator, first_chunk_value),
+        upstream_iterator=generator,
         media_type=media_type,
         headers=headers,
         status_code=final_status_code,
@@ -2030,15 +2078,19 @@ class ProxyBaseLLMRequestProcessing:
         Anthropic /messages and Google /generateContent streaming data generator require SSE events.
         Delegates to async_streaming_data_generator with SSE serializers.
         """
-        async for chunk in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+        stream = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
             proxy_logging_obj=proxy_logging_obj,
             serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
             serialize_error=lambda proxy_exc: f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n",
-        ):
-            yield chunk
+        )
+        try:
+            async for chunk in stream:
+                yield chunk
+        finally:
+            await close_stream(stream)
 
     @staticmethod
     def _process_chunk_with_cost_injection(chunk: Any, model_name: str) -> Any:
