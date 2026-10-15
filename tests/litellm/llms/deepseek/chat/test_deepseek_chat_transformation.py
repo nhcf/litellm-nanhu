@@ -124,7 +124,12 @@ class TestMergeReasoningContentToContent:
 
         assert "reasoning_content" not in messages[1]
         assert "thinking_blocks" not in messages[1]
-        assert "REF-TEST-1234" in messages[1]["content"]
+        assert messages[1]["content"][0] == {
+            "type": "text",
+            "text": "REF-TEST-1234. Now I will call the note tool.\n\n",
+        }
+        assert messages[1]["content"][1]["type"] == "thinking"
+        assert messages[1]["content"][2]["type"] == "tool_use"
 
     def test_preserves_system_messages(self):
         messages: List[Dict[str, Any]] = [
