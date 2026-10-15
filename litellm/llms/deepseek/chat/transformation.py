@@ -217,11 +217,17 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
-        DeepSeek does not support content in list format.
+        Flatten text-only content lists for legacy DeepSeek backends, while
+        preserving multimodal content blocks for vision-capable backends.
         Also merges reasoning_content into content for SGLang backends that
         do not natively process reasoning_content in input messages.
         """
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, list) and all(
+                block.get("type") == "text" for block in content
+            ):
+                handle_messages_with_content_list_to_str_conversion([message])
         self._merge_reasoning_content_to_content(messages)
         if is_async:
             return super()._transform_messages(
@@ -254,7 +260,12 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             if not reasoning:
                 continue
             existing_content = message.get("content")
-            if existing_content:
+            if isinstance(existing_content, list) and existing_content:
+                message["content"] = [
+                    {"type": "text", "text": reasoning + "\n\n"},
+                    *existing_content,
+                ]
+            elif existing_content:
                 message["content"] = reasoning + "\n\n" + str(existing_content)
             else:
                 message["content"] = reasoning
