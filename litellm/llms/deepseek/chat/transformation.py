@@ -23,7 +23,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         DeepSeek reasoner models support thinking parameter.
         """
         params: Final = super().get_supported_openai_params(model)
-        params.extend(["thinking", "reasoning_effort"])
+        params.extend(["thinking", "reasoning_effort", "chat_template_kwargs"])
         return params
 
     def map_openai_params(
@@ -46,10 +46,19 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         # Let parent handle standard params first
         optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
-        # Pop thinking/reasoning_effort from optional_params first (parent may have added them)
+        # Pop thinking/reasoning_effort/chat_template_kwargs from optional_params first (parent may have added them)
         # Then re-add only if valid for DeepSeek
         thinking_value: Final = optional_params.pop("thinking", None)
         reasoning_effort: Final = optional_params.pop("reasoning_effort", None)
+        # nanhu integration: honor DeepSeek chat_template_kwargs
+        # (e.g. {"reasoning_effort": "high"...}) as an alternative way to request thinking.
+        chat_template_kwargs: Final = optional_params.pop("chat_template_kwargs", None)
+        chat_template_effort = None
+        if isinstance(chat_template_kwargs, dict):
+            chat_template_effort = chat_template_kwargs.get("reasoning_effort")
+            # explicit opt-in through chat_template_kwargs.enable_thinking
+            if thinking_value is None and chat_template_kwargs.get("enable_thinking") is True:
+                thinking_value = {"type": "enabled"}
 
         # Handle thinking parameter - accept both enabled and disabled, ignore budget_tokens
         if isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
@@ -58,6 +67,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         # Otherwise fall back to reasoning_effort: "none" disables, anything else enables
         elif reasoning_effort is not None:
             optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
+
+        # nanhu: also honor a reasoning_effort carried inside chat_template_kwargs
+        elif chat_template_effort is not None:
+            optional_params["thinking"] = {"type": "disabled" if chat_template_effort == "none" else "enabled"}
 
         return optional_params
 
