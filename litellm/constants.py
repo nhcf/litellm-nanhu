@@ -988,6 +988,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES: Final = {
     "store": None,
     "metadata": None,
     "context_management": None,
+    "chat_template_kwargs": None,
 }
 
 openai_compatible_endpoints: Final[list[str]] = [

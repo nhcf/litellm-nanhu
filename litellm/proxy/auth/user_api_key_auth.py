@@ -2769,15 +2769,60 @@ async def user_api_key_auth_builder(
             if api_key.startswith("sk-"):
                 api_key = hash_token(token=api_key)
 
-            with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
-                valid_token = IdentityStore.key_from_principal(
-                    await IdentityStore(
-                        prisma_client,
-                        user_api_key_cache,
-                        parent_otel_span=parent_otel_span,
+            try:
+                with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
+                    valid_token = IdentityStore.key_from_principal(
+                        await IdentityStore(
+                            prisma_client,
+                            user_api_key_cache,
+                            parent_otel_span=parent_otel_span,
+                            proxy_logging_obj=proxy_logging_obj,
+                        ).resolve(hashed_token=api_key)
+                    )
+            except ProxyException as lookup_error:
+                if (
+                    lookup_error.code == 401 or lookup_error.code == "401"
+                ) and general_settings.get("enable_yunguan_auth"):
+                    # ===== yunguan (operations management) auth fallback =====
+                    # Standard key lookup failed; validate the SK against the
+                    # yunguan interface and, on success, reuse/create a Team +
+                    # API Key so yunguan-provided keys work with LiteLLM.
+                    from litellm.proxy.auth.yunguan_auth import yunguan_auth_fallback
+
+                    model_for_yunguan = _get_model_from_request_context(
+                        request_data=request_data,
+                        route=route,
+                        request=request,
+                    )
+                    (
+                        yunguan_valid_token,
+                        yunguan_error_code,
+                    ) = await yunguan_auth_fallback(
+                        # NOTE: mirrors the pre-upgrade behavior - `api_key` has
+                        # already been hashed above, so the yunguan module receives
+                        # the hashed token (unchanged from nanhu's v1.106 patch).
+                        api_key=api_key,
+                        model=model_for_yunguan,
+                        general_settings=general_settings,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
                         proxy_logging_obj=proxy_logging_obj,
-                    ).resolve(hashed_token=api_key)
-                )
+                        parent_otel_span=parent_otel_span,
+                    )
+                    if yunguan_valid_token is not None:
+                        valid_token = yunguan_valid_token
+                        verbose_proxy_logger.info(
+                            "yunguan auth succeeded: team_id=%s",
+                            getattr(valid_token, "team_id", None),
+                        )
+                    else:
+                        if yunguan_error_code:
+                            lookup_error.message = (
+                                f"{lookup_error.message} ZJIC.{yunguan_error_code}"
+                            )
+                        raise lookup_error
+                else:
+                    raise lookup_error
             # update end-user params on valid token
             # These can change per request - it's important to update them here
             valid_token.end_user_id = end_user_params.get("end_user_id")
