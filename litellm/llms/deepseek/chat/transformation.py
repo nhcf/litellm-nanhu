@@ -48,9 +48,17 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         # parent's _handle_deepseek_thinking_params may have consumed them from
         # optional_params without forwarding (e.g. reasoning_effort="none" is
         # popped but not re-added by the parent).
-        thinking_value = optional_params.pop("thinking", None) or non_default_params.get("thinking")
-        reasoning_effort = optional_params.pop("reasoning_effort", None) or non_default_params.get("reasoning_effort")
-        user_chat_template_kwargs = optional_params.pop("chat_template_kwargs", None) or non_default_params.get("chat_template_kwargs") or {}
+        thinking_value = optional_params.pop(
+            "thinking", None
+        ) or non_default_params.get("thinking")
+        reasoning_effort = optional_params.pop(
+            "reasoning_effort", None
+        ) or non_default_params.get("reasoning_effort")
+        user_chat_template_kwargs = (
+            optional_params.pop("chat_template_kwargs", None)
+            or non_default_params.get("chat_template_kwargs")
+            or {}
+        )
         user_chat_template_kwargs = (
             user_chat_template_kwargs
             if isinstance(user_chat_template_kwargs, dict)
@@ -97,7 +105,6 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                     optional_params["extra_body"] = {}
                 optional_params["extra_body"]["thinking"] = thinking_value
                 generated = {
-                    "reasoning_effort": "none",
                     "thinking": False,
                     "enable_thinking": False,
                 }
@@ -123,7 +130,6 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 optional_params["extra_body"] = {}
             optional_params["extra_body"]["thinking"] = {"type": "disabled"}
             generated = {
-                "reasoning_effort": "none",
                 "thinking": False,
                 "enable_thinking": False,
             }
@@ -152,7 +158,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         # If user explicitly set thinking=false or enable_thinking=false in
         # chat_template_kwargs, respect that — don't auto-enable thinking.
-        if user_chat_template_kwargs.get("thinking") is False or user_chat_template_kwargs.get("enable_thinking") is False:
+        if (
+            user_chat_template_kwargs.get("thinking") is False
+            or user_chat_template_kwargs.get("enable_thinking") is False
+        ):
             enable_thinking = False
 
         # Generate chat_template_kwargs for thinking mode.
@@ -179,12 +188,12 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             # auto-enabled (e.g. user set thinking=false explicitly).
             if "extra_body" not in optional_params:
                 optional_params["extra_body"] = {}
-            if user_chat_template_kwargs.get("thinking") is False or user_chat_template_kwargs.get("enable_thinking") is False:
-                # Explicit disable via chat_template_kwargs: fill the full
-                # disable triple — the SGLang chat template ignores a lone
-                # thinking=false without reasoning_effort="none".
+            if (
+                user_chat_template_kwargs.get("thinking") is False
+                or user_chat_template_kwargs.get("enable_thinking") is False
+            ):
+                # Keep both disable flags without generating an invalid effort.
                 generated = {
-                    "reasoning_effort": "none",
                     "thinking": False,
                     "enable_thinking": False,
                 }
@@ -192,7 +201,9 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 optional_params["extra_body"]["chat_template_kwargs"] = generated
                 optional_params["extra_body"]["thinking"] = {"type": "disabled"}
             else:
-                optional_params["extra_body"]["chat_template_kwargs"] = user_chat_template_kwargs
+                optional_params["extra_body"].setdefault(
+                    "chat_template_kwargs", {}
+                ).update(user_chat_template_kwargs)
 
         # The SGLang backend only respects chat_template_kwargs for thinking
         # control. Top-level reasoning_effort with values "max"/"xhigh" causes

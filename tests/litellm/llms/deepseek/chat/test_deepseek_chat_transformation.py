@@ -26,7 +26,9 @@ class TestMergeReasoningContentToContent:
                 "role": "assistant",
                 "content": "tool call text",
                 "reasoning_content": "private thinking here",
-                "thinking_blocks": [{"type": "thinking", "thinking": "private thinking here"}],
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "private thinking here"}
+                ],
             },
         ]
         original_user_msg = deepcopy(messages[0])
@@ -54,7 +56,11 @@ class TestMergeReasoningContentToContent:
 
     def test_skips_non_assistant_messages(self):
         messages: List[Dict[str, Any]] = [
-            {"role": "user", "content": "question", "reasoning_content": "should be kept"},
+            {
+                "role": "user",
+                "content": "question",
+                "reasoning_content": "should be kept",
+            },
             {
                 "role": "assistant",
                 "content": "answer",
@@ -65,7 +71,11 @@ class TestMergeReasoningContentToContent:
         DeepSeekChatConfig._merge_reasoning_content_to_content(messages)
 
         # Non-assistant messages are untouched
-        assert messages[0] == {"role": "user", "content": "question", "reasoning_content": "should be kept"}
+        assert messages[0] == {
+            "role": "user",
+            "content": "question",
+            "reasoning_content": "should be kept",
+        }
         assert messages[1]["content"] == "assistant thinking\n\nanswer"
         assert "reasoning_content" not in messages[1]
 
@@ -106,16 +116,30 @@ class TestMergeReasoningContentToContent:
         """Simulate the exact scenario from BUG_REPORT.md: a tool-call round
         where the assistant message has thinking + tool_use."""
         messages: List[Dict[str, Any]] = [
-            {"role": "user", "content": "Think privately, then call the note tool with x=hello."},
+            {
+                "role": "user",
+                "content": "Think privately, then call the note tool with x=hello.",
+            },
             {
                 "role": "assistant",
                 "content": [
-                    {"type": "thinking", "thinking": "REF-TEST-1234. Now I will call the note tool."},
-                    {"type": "tool_use", "id": "toolu_probe", "name": "note", "input": {"x": "hello"}},
+                    {
+                        "type": "thinking",
+                        "thinking": "REF-TEST-1234. Now I will call the note tool.",
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_probe",
+                        "name": "note",
+                        "input": {"x": "hello"},
+                    },
                 ],
                 "reasoning_content": "REF-TEST-1234. Now I will call the note tool.",
                 "thinking_blocks": [
-                    {"type": "thinking", "thinking": "REF-TEST-1234. Now I will call the note tool."},
+                    {
+                        "type": "thinking",
+                        "thinking": "REF-TEST-1234. Now I will call the note tool.",
+                    },
                 ],
             },
         ]
@@ -144,7 +168,10 @@ class TestMergeReasoningContentToContent:
 
         DeepSeekChatConfig._merge_reasoning_content_to_content(messages)
 
-        assert messages[0] == {"role": "system", "content": "You are a helpful assistant."}
+        assert messages[0] == {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+        }
         assert messages[1] == {"role": "user", "content": "query"}
         assert messages[2]["content"] == "thinking...\n\nresult"
 
@@ -209,7 +236,9 @@ class TestDeepSeekThinkingParams:
         )
 
         # Per DeepSeek docs: medium normalizes to high
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        assert (
+            result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        )
         assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
 
     def test_map_reasoning_effort_low(self):
@@ -224,7 +253,9 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        assert (
+            result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        )
         assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
 
     def test_map_reasoning_effort_high(self):
@@ -239,7 +270,9 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        assert (
+            result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        )
         assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
 
     def test_map_reasoning_effort_none_does_not_enable_thinking(self):
@@ -360,7 +393,9 @@ class TestDeepSeekThinkingParams:
         )
 
         # low normalizes to high per DeepSeek docs
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        assert (
+            result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        )
         assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
         assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
 
@@ -452,7 +487,9 @@ class TestDeepSeekThinkingParams:
         )
 
         assert "chat_template_kwargs" in result["extra_body"]
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        assert (
+            result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        )
         assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
         assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
         assert result["extra_body"]["thinking"] == {"type": "enabled"}
@@ -471,7 +508,7 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["extra_body"]["thinking"] == {"type": "disabled"}
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "none"
+        assert "reasoning_effort" not in result["extra_body"]["chat_template_kwargs"]
         assert result["extra_body"]["chat_template_kwargs"]["thinking"] is False
         assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is False
 
@@ -489,7 +526,7 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["extra_body"]["thinking"] == {"type": "disabled"}
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "none"
+        assert "reasoning_effort" not in result["extra_body"]["chat_template_kwargs"]
         assert result["extra_body"]["chat_template_kwargs"]["thinking"] is False
         assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is False
 
@@ -508,7 +545,6 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["extra_body"]["chat_template_kwargs"] == {
-            "reasoning_effort": "none",
             "thinking": False,
             "enable_thinking": False,
         }
@@ -527,7 +563,6 @@ class TestDeepSeekThinkingParams:
         )
 
         assert result["extra_body"]["chat_template_kwargs"] == {
-            "reasoning_effort": "none",
             "thinking": False,
             "enable_thinking": False,
         }
@@ -566,6 +601,42 @@ class TestDeepSeekThinkingParams:
         assert result["extra_body"]["chat_template_kwargs"]["thinking"] is True
         assert result["extra_body"]["chat_template_kwargs"]["enable_thinking"] is True
 
+    @pytest.mark.parametrize("model", ["DeepSeek-V4.1-Flash", "deepseek-chat"])
+    @pytest.mark.parametrize(
+        "disable_params",
+        [
+            {"reasoning_effort": "none"},
+            {"thinking": {"type": "disabled"}},
+            {"chat_template_kwargs": {"thinking": False}},
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        ],
+    )
+    def test_disable_thinking_omits_effort_and_preserves_custom_fields(
+        self, model, disable_params
+    ):
+        params = deepcopy(disable_params)
+        params.setdefault("chat_template_kwargs", {})["custom_field"] = "value"
+        original_params = deepcopy(params)
+
+        result = self.config.map_openai_params(
+            non_default_params=params,
+            optional_params={"extra_body": {"existing_key": "existing_value"}},
+            model=model,
+            drop_params=False,
+        )
+
+        assert "reasoning_effort" not in result
+        assert result["extra_body"] == {
+            "existing_key": "existing_value",
+            "thinking": {"type": "disabled"},
+            "chat_template_kwargs": {
+                "thinking": False,
+                "enable_thinking": False,
+                "custom_field": "value",
+            },
+        }
+        assert params == original_params
+
     def test_chat_template_kwargs_no_top_level_reasoning_effort(self):
         """Top-level reasoning_effort should NOT be set; only chat_template_kwargs."""
         non_default_params = {"reasoning_effort": "high"}
@@ -581,4 +652,6 @@ class TestDeepSeekThinkingParams:
         # Top-level reasoning_effort must NOT be present (SGLang backend
         # rejects max/xhigh values with HTTP 400).
         assert "reasoning_effort" not in result
-        assert result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        assert (
+            result["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == "high"
+        )
